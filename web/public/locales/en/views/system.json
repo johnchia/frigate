@@ -218,6 +218,19 @@
       "reconnectsLastHour": "Reconnects (last hour)",
       "stallsLastHour": "Stalls (last hour)"
     },
+    "regionBudget": {
+      "title": "Region Budget",
+      "description": "Caps how many detection regions this camera runs per second so that a busy scene cannot slow down the other cameras.",
+      "budget": "Budget",
+      "perSecond": "{{rate}}/s",
+      "requested": "Regions requested",
+      "admitted": "Regions admitted",
+      "shed": "Regions shed",
+      "shedPercent": "{{percent}}% shed",
+      "enforced": "Enforced",
+      "observing": "Observing only",
+      "notDerived": "Not yet derived"
+    },
     "toast": {
       "success": {
         "copyToClipboard": "Copied probe data to clipboard."

@@ -31,6 +31,13 @@ export type CameraStats = {
   ffmpeg_cpu?: string;
   capture_cpu?: string;
   detect_cpu?: string;
+  // detection regions this camera asked for versus what the budget allowed;
+  // optional so the UI still works against a backend that predates the budget
+  regions_requested?: number;
+  regions_admitted?: number;
+  regions_shed?: number;
+  region_budget?: number | null;
+  region_budget_enforced?: boolean;
 };
 
 export type CpuStats = {

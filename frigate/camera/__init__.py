@@ -23,6 +23,11 @@ class CameraMetrics:
     reconnects_last_hour: ValueProxy[int]
     stalls_last_hour: ValueProxy[int]
 
+    # cumulative detection regions this camera asked for, and how many the
+    # region budget allowed; written at most once a second by the camera process
+    regions_requested: ValueProxy[int]
+    regions_admitted: ValueProxy[int]
+
     def __init__(self, manager: SyncManager):
         self.camera_fps = manager.Value("d", 0)
         self.detection_fps = manager.Value("d", 0)
@@ -40,6 +45,8 @@ class CameraMetrics:
         self.ffmpeg_pid = manager.Value("i", 0)
         self.reconnects_last_hour = manager.Value("i", 0)
         self.stalls_last_hour = manager.Value("i", 0)
+        self.regions_requested = manager.Value("i", 0)
+        self.regions_admitted = manager.Value("i", 0)
 
 
 class PTZMetrics:

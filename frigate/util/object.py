@@ -488,6 +488,205 @@ def get_startup_regions(
     return regions
 
 
+# Region sources, ordered by scheduling priority. Regions covering objects the
+# tracker already follows come first: dropping one of those breaks track
+# continuity, while dropping a novel motion region only delays discovery.
+REGION_SOURCE_TRACKED = 0
+REGION_SOURCE_MOTION = 1
+REGION_SOURCE_STARTUP = 2
+
+# Relative weights used to rank novel motion regions against each other. Area is
+# a separate term rather than a multiplier so that a camera with no history yet
+# degrades to ranking by size instead of to an arbitrary order.
+_PRIOR_WEIGHT = 0.6
+_AREA_WEIGHT = 0.4
+
+
+def _grid_span(low: float, high: float, extent: int) -> tuple[int, int]:
+    """Map a pixel range onto inclusive region grid indices."""
+    if extent <= 0:
+        return (0, 0)
+
+    start = int(low / extent * GRID_SIZE)
+    end = int(high / extent * GRID_SIZE)
+    start = min(max(start, 0), GRID_SIZE - 1)
+    end = min(max(end, 0), GRID_SIZE - 1)
+
+    if end < start:
+        start, end = end, start
+
+    return (start, end)
+
+
+def region_prior(
+    region: list[int],
+    frame_shape: tuple[int, int],
+    region_grid: list[list[dict[str, Any]]],
+) -> float:
+    """Mean historical detection density of the grid cells a region covers.
+
+    The region grid holds one cell per GRID_SIZE x GRID_SIZE block of the frame,
+    and each cell accumulates the size of every confirmed tracked object whose
+    centroid landed in it (see get_camera_regions_grid). How many sizes a cell
+    holds is therefore how often objects have actually appeared there, which is
+    the same popularity signal get_startup_regions already uses.
+
+    Note the grid is indexed as grid[x][y], matching get_region_from_grid.
+
+    Args:
+        region: Region as [x_min, y_min, x_max, y_max] in detect frame pixels
+        frame_shape: Detect frame shape as (height, width)
+        region_grid: Persisted region grid for the camera
+
+    Returns:
+        Density from 0.0 to 1.0, or 0.0 when the grid holds no history yet
+    """
+    busiest = max(
+        (len(cell["sizes"]) for column in region_grid for cell in column),
+        default=0,
+    )
+
+    # cold grid: a new camera, or one whose history has not been built yet
+    if busiest == 0:
+        return 0.0
+
+    x_start, x_end = _grid_span(region[0], region[2], frame_shape[1])
+    y_start, y_end = _grid_span(region[1], region[3], frame_shape[0])
+
+    total = 0
+    covered = 0
+
+    for x in range(x_start, x_end + 1):
+        for y in range(y_start, y_end + 1):
+            total += len(region_grid[x][y]["sizes"])
+            covered += 1
+
+    if covered == 0:
+        return 0.0
+
+    return total / covered / busiest
+
+
+def rank_sourced_regions(
+    sourced_regions: list[tuple[int, list[int]]],
+    frame_shape: tuple[int, int],
+    region_grid: list[list[dict[str, Any]]],
+) -> list[tuple[int, list[int]]]:
+    """Order regions so the most valuable ones are detected on first.
+
+    Ordering matters whenever detection capacity is short, because whatever is
+    submitted first is what survives when the rest is dropped. Regions sort by
+    source first (tracked objects, then novel motion, then the startup scan),
+    and novel motion regions sort among themselves by how often objects have
+    historically appeared where they sit, falling back to region size on a
+    camera with no history.
+
+    Args:
+        sourced_regions: (source, region) pairs using REGION_SOURCE_* values
+        frame_shape: Detect frame shape as (height, width)
+        region_grid: Persisted region grid for the camera
+
+    Returns:
+        The same pairs, most valuable first
+    """
+    frame_area = frame_shape[0] * frame_shape[1]
+
+    def sort_key(item: tuple[int, list[int]]) -> tuple[int, float]:
+        source, region = item
+
+        # tracked and startup regions are ordered by source alone; the order
+        # they arrive in is already meaningful for both
+        if source != REGION_SOURCE_MOTION:
+            return (source, 0.0)
+
+        region_area = max(0, region[2] - region[0]) * max(0, region[3] - region[1])
+        normalized_area = region_area / frame_area if frame_area > 0 else 0.0
+        score = _PRIOR_WEIGHT * region_prior(
+            region, frame_shape, region_grid
+        ) + _AREA_WEIGHT * min(normalized_area, 1.0)
+
+        # negated so that higher scores sort earlier within the source
+        return (source, -score)
+
+    return sorted(sourced_regions, key=sort_key)
+
+
+def rank_regions(
+    sourced_regions: list[tuple[int, list[int]]],
+    frame_shape: tuple[int, int],
+    region_grid: list[list[dict[str, Any]]],
+) -> list[list[int]]:
+    """Order regions most valuable first, dropping the source tags.
+
+    See rank_sourced_regions for the ordering itself.
+    """
+    return [
+        region
+        for _, region in rank_sourced_regions(sourced_regions, frame_shape, region_grid)
+    ]
+
+
+def apply_region_budget(
+    ranked_regions: list[tuple[int, list[int]]],
+    allowance: int,
+    explore_fraction: float,
+) -> list[list[int]]:
+    """Trim an already ranked region list down to what the budget allows.
+
+    Most of the allowance goes to the highest ranked regions. A small share is
+    reserved for the lowest ranked novel motion regions, because the historical
+    prior is otherwise self reinforcing: an area that is never looked at never
+    accumulates the detections that would raise its rank, so a newly active part
+    of the frame could stay starved indefinitely.
+
+    Only novel motion regions are used for that reserved share. Tracked regions
+    are already known to matter, and startup regions deliberately revisit the
+    busiest cells, so neither samples anything new.
+
+    Args:
+        ranked_regions: (source, region) pairs from rank_sourced_regions
+        allowance: How many regions may be run this frame
+        explore_fraction: Share of the allowance reserved for exploration
+
+    Returns:
+        The regions to run, still in rank order
+    """
+    if allowance <= 0:
+        return []
+
+    if allowance >= len(ranked_regions):
+        return [region for _, region in ranked_regions]
+
+    motion_positions = [
+        i
+        for i, (source, _) in enumerate(ranked_regions)
+        if source == REGION_SOURCE_MOTION
+    ]
+
+    explore_slots = 0
+    if motion_positions and allowance > 1:
+        # always leave at least one slot for the highest ranked region
+        explore_slots = min(
+            int(allowance * explore_fraction), allowance - 1, len(motion_positions)
+        )
+
+    chosen = list(range(allowance - explore_slots))
+    chosen_set = set(chosen)
+    added = 0
+
+    # walk the motion tier from the back, which is where the prior starves
+    for i in reversed(motion_positions):
+        if added >= explore_slots:
+            break
+
+        if i not in chosen_set:
+            chosen.append(i)
+            chosen_set.add(i)
+            added += 1
+
+    return [ranked_regions[i][1] for i in sorted(chosen)]
+
+
 def reduce_detections(
     frame_shape: tuple[int, int],
     all_detections: list[tuple[Any]],
