@@ -11,6 +11,7 @@ from frigate.util.object import (
     REGION_SOURCE_STARTUP,
     REGION_SOURCE_TRACKED,
     average_boxes,
+    grid_peak_density,
     rank_regions,
     region_prior,
 )
@@ -129,6 +130,27 @@ class TestRegionPrior(unittest.TestCase):
 
         self.assertGreater(
             region_prior([600, 450, 900, 700], self.frame_shape, grid), 0.0
+        )
+
+    def test_peak_density(self) -> None:
+        self.assertEqual(grid_peak_density(empty_region_grid()), 0)
+
+        grid = empty_region_grid()
+        grid[2][3]["sizes"] = [0.1] * 7
+        grid[5][5]["sizes"] = [0.1] * 2
+
+        self.assertEqual(grid_peak_density(grid), 7)
+
+    def test_precomputed_peak_matches_internal(self) -> None:
+        """rank_sourced_regions hoists this out of the per region path."""
+        grid = empty_region_grid()
+        grid[6][1]["sizes"] = [0.1] * 4
+        grid[0][0]["sizes"] = [0.1] * 9
+        region = [510, 80, 530, 100]
+
+        self.assertEqual(
+            region_prior(region, self.frame_shape, grid),
+            region_prior(region, self.frame_shape, grid, grid_peak_density(grid)),
         )
 
 

@@ -79,6 +79,61 @@ so a brief burst of activity can draw on a quiet moment just before it, but a
 camera that has been idle for an hour cannot bank an hour of budget and spend it
 all at once.
 
+## What it does and does not reduce
+
+The budget only reduces work that is done **per region**. Work done once per
+frame is unchanged.
+
+Reduced, roughly in proportion to how many regions are skipped:
+
+- Preparing each region for the detector, which means cropping it out of the
+  frame, converting its color format, and resizing it to the model's input size.
+  This is CPU work.
+- Copying the prepared region into shared memory and signaling the detector.
+- The inference itself.
+- Converting the tensor for models that take floating point input, which is also
+  CPU work.
+
+Not reduced:
+
+- **Decoding the camera stream.** This is a fixed cost set by the substream's
+  resolution and frame rate, and it does not change with how much is moving. See
+  [Video pipeline](/frigate/video_pipeline) for where decoding sits.
+- **Motion detection**, which runs on every frame and is what produces the
+  regions in the first place.
+- **Grouping motion into candidate regions.** Frigate builds the full list of
+  regions, ranks it, and only then trims it, so this cost is paid before anything
+  is skipped.
+- **Object tracking**, which scales with the number of tracked objects rather
+  than the number of regions.
+
+The practical consequence is that the budget does almost nothing while a camera
+is quiet, and has its largest effect in exactly the busy scenes it exists for.
+
+### With a GPU detector
+
+The effect here is often not what people expect, so it is worth stating plainly.
+
+Frigate sends one region at a time per camera and waits for the result before
+sending the next. A fast GPU spends much of that cycle idle, waiting for the CPU
+to prepare the next region. On such a system the CPU is usually the limiting
+factor rather than the GPU.
+
+This means the budget mainly reduces **CPU** load on GPU systems. The CPU saving
+is, if anything, larger than on a USB or PCIe accelerator, because GPU models
+commonly take floating point input and pay that conversion on every inference.
+The GPU does see lower utilization, lower power draw, and less thermal
+throttling, but it was probably not the bottleneck to begin with.
+
+It also affects the automatically derived value. Frigate measures how long
+inference takes, and that measurement does not include the time spent preparing
+regions. On a system where the CPU is the constraint, the measurement is
+optimistic, so the derived budget can sit above the rate the system can actually
+sustain and may rarely engage.
+
+If you run a GPU detector and find the CPU pinned while `regions_shed` stays at
+zero, set `max_per_second` manually to something below the derived value.
+
 ## Configuration
 
 The budget can be set globally, per camera, or both. Camera level settings

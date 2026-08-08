@@ -518,10 +518,24 @@ def _grid_span(low: float, high: float, extent: int) -> tuple[int, int]:
     return (start, end)
 
 
+def grid_peak_density(region_grid: list[list[dict[str, Any]]]) -> int:
+    """Highest per cell detection count in a region grid.
+
+    Used to normalize region_prior. Scanning the whole grid costs GRID_SIZE
+    squared, so callers ranking many regions should compute this once and pass
+    it in rather than paying for it per region.
+    """
+    return max(
+        (len(cell["sizes"]) for column in region_grid for cell in column),
+        default=0,
+    )
+
+
 def region_prior(
     region: list[int],
     frame_shape: tuple[int, int],
     region_grid: list[list[dict[str, Any]]],
+    busiest: int | None = None,
 ) -> float:
     """Mean historical detection density of the grid cells a region covers.
 
@@ -537,17 +551,16 @@ def region_prior(
         region: Region as [x_min, y_min, x_max, y_max] in detect frame pixels
         frame_shape: Detect frame shape as (height, width)
         region_grid: Persisted region grid for the camera
+        busiest: Precomputed grid_peak_density, computed here when omitted
 
     Returns:
         Density from 0.0 to 1.0, or 0.0 when the grid holds no history yet
     """
-    busiest = max(
-        (len(cell["sizes"]) for column in region_grid for cell in column),
-        default=0,
-    )
+    if busiest is None:
+        busiest = grid_peak_density(region_grid)
 
     # cold grid: a new camera, or one whose history has not been built yet
-    if busiest == 0:
+    if busiest <= 0:
         return 0.0
 
     x_start, x_end = _grid_span(region[0], region[2], frame_shape[1])
@@ -591,6 +604,10 @@ def rank_sourced_regions(
     """
     frame_area = frame_shape[0] * frame_shape[1]
 
+    # scanned once here rather than per region: a busy scene can propose a lot
+    # of motion regions, and this is on the per frame path
+    busiest = grid_peak_density(region_grid)
+
     def sort_key(item: tuple[int, list[int]]) -> tuple[int, float]:
         source, region = item
 
@@ -602,7 +619,7 @@ def rank_sourced_regions(
         region_area = max(0, region[2] - region[0]) * max(0, region[3] - region[1])
         normalized_area = region_area / frame_area if frame_area > 0 else 0.0
         score = _PRIOR_WEIGHT * region_prior(
-            region, frame_shape, region_grid
+            region, frame_shape, region_grid, busiest
         ) + _AREA_WEIGHT * min(normalized_area, 1.0)
 
         # negated so that higher scores sort earlier within the source
