@@ -35,6 +35,11 @@ logger = logging.getLogger(__name__)
 GRID_SIZE = 8
 
 
+def create_empty_region_grid() -> list[list[dict[str, Any]]]:
+    """Build a region grid with no recorded detections, indexed as grid[x][y]."""
+    return [[{"sizes": []} for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
+
+
 def get_camera_regions_grid(
     name: str,
     detect: DetectConfig,
@@ -47,12 +52,10 @@ def get_camera_regions_grid(
         grid = regions.grid
         last_update = regions.last_update
     except DoesNotExist:
-        grid = []
-        for x in range(GRID_SIZE):
-            row = []
-            for y in range(GRID_SIZE):
-                row.append({"sizes": []})
-            grid.append(row)
+        # no row means the grid has never been built, so seed it from the
+        # camera's full history. an explicitly cleared grid is stored as an
+        # empty row instead, which keeps that case out of this branch
+        grid = create_empty_region_grid()
         last_update = 0
 
     # get events for timeline entries
