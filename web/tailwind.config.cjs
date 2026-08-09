@@ -50,6 +50,8 @@ module.exports = {
         "timeline-zoom-in": "timeline-zoom-in 0.3s ease-out",
         "timeline-zoom-out": "timeline-zoom-out 0.3s ease-out",
         "cursor-blink": "cursor-blink 1s step-end infinite",
+        // 0.4s is 2.5 flashes per second, under the WCAG 2.3.1 limit of 3
+        "motion-strobe": "motion-strobe 0.4s step-end infinite",
       },
       aspectRatio: {
         wide: "32 / 9",
@@ -195,6 +197,13 @@ module.exports = {
           "0%, 100%": { opacity: "1" },
           "50%": { opacity: "0" },
         },
+        // square wave, so the patch sits at either the base brightness or the
+        // base plus the threshold rather than ramping through the values
+        // between. the motion detector compares against a hard cutoff
+        "motion-strobe": {
+          "0%, 100%": { opacity: "0" },
+          "50%": { opacity: "1" },
+        },
       },
       screens: {
         xs: "480px",
@@ -217,6 +226,14 @@ module.exports = {
               textTransform: "none",
             },
           textTransform: "capitalize",
+        },
+        // static stand in for the motion strobe: holds the lit state over the
+        // lower half of the patch, so the brightness step is still visible as
+        // an edge for anyone who has asked for reduced motion
+        ".strobe-static": {
+          animation: "none",
+          opacity: "1",
+          clipPath: "inset(50% 0 0 0)",
         },
       });
     }),

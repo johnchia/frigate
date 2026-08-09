@@ -902,6 +902,11 @@
       "title": "Contour Area",
       "desc": "The contour area value is used to decide which groups of changed pixels qualify as motion. <em>Default: 10</em>"
     },
+    "preview": {
+      "title": "Smallest motion that registers",
+      "desc": "A patch this size, changing this much, is the least that counts as motion. Real movement is irregular and often breaks into several smaller patches, so keep this comfortably below the smallest thing you want to catch.",
+      "contrastCaveat": "Improve Contrast is on, so in low contrast scenes a fainter change than this is enough."
+    },
     "improveContrast": {
       "title": "Improve Contrast",
       "desc": "Improve contrast for darker scenes. <em>Default: ON</em>"
