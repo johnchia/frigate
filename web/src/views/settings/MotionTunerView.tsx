@@ -23,6 +23,7 @@ import { Trans, useTranslation } from "react-i18next";
 import { useDocDomain } from "@/hooks/use-doc-domain";
 import { cn } from "@/lib/utils";
 import { isDesktop } from "react-device-detect";
+import { useResizeObserver } from "@/hooks/resize-observer";
 
 type MotionTunerViewProps = {
   selectedCamera: string;
@@ -34,6 +35,11 @@ type MotionSettings = {
   contour_area?: number;
   improve_contrast?: boolean;
 };
+
+type TunedControl = "threshold" | "contourArea";
+
+// fallback for motion.frame_height, which is optional in the config
+const DEFAULT_MOTION_FRAME_HEIGHT = 100;
 
 export default function MotionTunerView({
   selectedCamera,
@@ -69,6 +75,83 @@ export default function MotionTunerView({
       return config.cameras[selectedCamera];
     }
   }, [config, selectedCamera]);
+
+  // the preview is only drawn while a slider is actively being driven, so it
+  // never sits over the image while the scene is being watched. pointer and
+  // keyboard are tracked separately: a click leaves the thumb focused, and
+  // treating that as "still tuning" would keep the preview up after release
+  const [pointerControl, setPointerControl] = useState<TunedControl | null>(
+    null,
+  );
+  const [focusControl, setFocusControl] = useState<TunedControl | null>(null);
+  const tunedControl = pointerControl ?? focusControl;
+
+  useEffect(() => {
+    if (!pointerControl) return;
+
+    // release can land outside the slider, so listen on the window rather than
+    // relying on the slider seeing the matching pointerup
+    const clear = () => setPointerControl(null);
+    window.addEventListener("pointerup", clear);
+    window.addEventListener("pointercancel", clear);
+
+    return () => {
+      window.removeEventListener("pointerup", clear);
+      window.removeEventListener("pointercancel", clear);
+    };
+  }, [pointerControl]);
+
+  const sliderPreviewProps = useCallback(
+    (control: TunedControl) => ({
+      onPointerDown: () => setPointerControl(control),
+      onFocus: (event: React.FocusEvent<HTMLElement>) => {
+        // only keyboard focus, otherwise a click would show the preview twice
+        // over and keep it up once the pointer is released
+        if (event.target.matches(":focus-visible")) {
+          setFocusControl(control);
+        }
+      },
+      onBlur: () => setFocusControl(null),
+    }),
+    [],
+  );
+
+  const previewContainerRef = useRef<HTMLDivElement | null>(null);
+  const [{ width: previewWidth, height: previewHeight }] =
+    useResizeObserver(previewContainerRef);
+
+  // where the camera frame actually lands inside its container. CameraImage top
+  // aligns the frame and only centers it horizontally, so this is an
+  // object-contain fit with the vertical offset held at zero
+  const frameRect = useMemo(() => {
+    if (!cameraConfig || !previewWidth || !previewHeight) {
+      return undefined;
+    }
+
+    const aspect = cameraConfig.detect.width / cameraConfig.detect.height;
+
+    if (previewWidth / previewHeight > aspect) {
+      const height = previewHeight;
+      const width = height * aspect;
+      return { left: (previewWidth - width) / 2, width, height };
+    }
+
+    return { left: 0, width: previewWidth, height: previewWidth / aspect };
+  }, [cameraConfig, previewWidth, previewHeight]);
+
+  // contour_area is measured on the downscaled motion frame, which shares the
+  // camera's aspect ratio. a square of that area therefore has a side of
+  // sqrt(area) / frame_height as a fraction of frame height, at any resolution
+  const previewSizePercent = useMemo(() => {
+    const frameHeight =
+      cameraConfig?.motion?.frame_height ?? DEFAULT_MOTION_FRAME_HEIGHT;
+
+    if (!motionSettings.contour_area || !frameHeight) {
+      return undefined;
+    }
+
+    return (Math.sqrt(motionSettings.contour_area) / frameHeight) * 100;
+  }, [motionSettings.contour_area, cameraConfig]);
 
   useEffect(() => {
     userInteractedRef.current = false;
@@ -227,6 +310,7 @@ export default function MotionTunerView({
                 onValueChange={(value) => {
                   handleMotionConfigChange({ threshold: value[0] });
                 }}
+                {...sliderPreviewProps("threshold")}
               />
               <div className="align-center ml-6 mr-2 flex text-lg">
                 {motionSettings.threshold}
@@ -258,6 +342,7 @@ export default function MotionTunerView({
                 onValueChange={(value) => {
                   handleMotionConfigChange({ contour_area: value[0] });
                 }}
+                {...sliderPreviewProps("contourArea")}
               />
               <div className="align-center ml-6 mr-2 flex text-lg">
                 {motionSettings.contour_area}
@@ -323,7 +408,10 @@ export default function MotionTunerView({
             isDesktop && "md:mr-3",
           )}
         >
-          <div className="size-full min-h-10">
+          <div
+            className="relative size-full min-h-10"
+            ref={previewContainerRef}
+          >
             <AutoUpdatingCameraImage
               camera={cameraConfig.name}
               searchParams={new URLSearchParams([["motion", "1"]])}
@@ -331,6 +419,49 @@ export default function MotionTunerView({
               className="size-full"
               cameraClasses="relative w-full h-full flex flex-col justify-start"
             />
+            {tunedControl && frameRect && previewSizePercent !== undefined ? (
+              <div
+                className="pointer-events-none absolute top-0 flex flex-col items-center justify-center gap-2"
+                style={{
+                  left: frameRect.left,
+                  width: frameRect.width,
+                  height: frameRect.height,
+                }}
+              >
+                <div
+                  className="relative border-2 border-dashed border-sky-400"
+                  style={{
+                    height: `${previewSizePercent}%`,
+                    aspectRatio: "1",
+                  }}
+                >
+                  {/* plus-lighter adds the threshold to each channel, so the
+                      patch brightens by exactly that many levels whatever it
+                      covers. plain opacity would scale with the pixel
+                      underneath and understate the change in dark areas */}
+                  <div
+                    className="absolute inset-0 animate-motion-strobe motion-reduce:strobe-static"
+                    style={{
+                      backgroundColor: `rgb(${motionSettings.threshold ?? 0}, ${motionSettings.threshold ?? 0}, ${motionSettings.threshold ?? 0})`,
+                      mixBlendMode: "plus-lighter",
+                    }}
+                  />
+                </div>
+                <div className="max-w-[min(20rem,90%)] rounded-lg bg-background/80 p-2 text-center">
+                  <div className="text-sm font-medium text-primary">
+                    {t("motionDetectionTuner.preview.title")}
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {t("motionDetectionTuner.preview.desc")}
+                  </div>
+                  {motionSettings.improve_contrast ? (
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {t("motionDetectionTuner.preview.contrastCaveat")}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
       ) : (
