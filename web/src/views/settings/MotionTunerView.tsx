@@ -38,9 +38,6 @@ type MotionSettings = {
 
 type TunedControl = "threshold" | "contourArea";
 
-// fallback for motion.frame_height, which is optional in the config
-const DEFAULT_MOTION_FRAME_HEIGHT = 100;
-
 export default function MotionTunerView({
   selectedCamera,
   setUnsavedChanges,
@@ -144,7 +141,10 @@ export default function MotionTunerView({
   // sqrt(area) / frame_height as a fraction of frame height, at any resolution
   const previewSizePercent = useMemo(() => {
     const frameHeight =
-      cameraConfig?.motion?.frame_height ?? DEFAULT_MOTION_FRAME_HEIGHT;
+      // mirrors improved_motion.py, which falls back to the full detect height
+      // when frame_height is unset. `||` rather than `??` so that 0 falls back
+      // the same way Python's `or` does
+      cameraConfig?.motion?.frame_height || cameraConfig?.detect?.height;
 
     if (!motionSettings.contour_area || !frameHeight) {
       return undefined;
@@ -453,6 +453,9 @@ export default function MotionTunerView({
                   </div>
                   <div className="mt-1 text-xs text-muted-foreground">
                     {t("motionDetectionTuner.preview.desc")}
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {t("motionDetectionTuner.preview.resolutionNote")}
                   </div>
                   {motionSettings.improve_contrast ? (
                     <div className="mt-1 text-xs text-muted-foreground">
