@@ -2,12 +2,7 @@ from pydantic import Field, model_validator
 
 from ..base import FrigateBaseModel
 
-__all__ = [
-    "DetectConfig",
-    "RegionBudgetConfig",
-    "StationaryConfig",
-    "StationaryMaxFramesConfig",
-]
+__all__ = ["DetectConfig", "StationaryConfig", "StationaryMaxFramesConfig"]
 
 
 class StationaryMaxFramesConfig(FrigateBaseModel):
@@ -49,33 +44,6 @@ class StationaryConfig(FrigateBaseModel):
     )
 
 
-class RegionBudgetConfig(FrigateBaseModel):
-    enabled: bool = Field(
-        default=False,
-        title="Enable the region budget",
-        description="Cap how many detection regions this camera may run per second so a single busy scene cannot starve the other cameras.",
-    )
-    max_per_second: int | None = Field(
-        default=None,
-        title="Maximum regions per second",
-        description="Maximum detection regions to run per second; leave empty to derive it from the measured speed of the configured detectors.",
-        gt=0,
-    )
-    min_per_second: int = Field(
-        default=2,
-        title="Minimum regions per second",
-        description="Lower bound applied to the derived budget so that a camera is never starved completely.",
-        gt=0,
-    )
-    explore_fraction: float = Field(
-        default=0.1,
-        title="Explore fraction",
-        description="Share of the budget reserved for regions with little detection history, so that newly active parts of the frame are still sampled.",
-        ge=0.0,
-        le=1.0,
-    )
-
-
 class DetectConfig(FrigateBaseModel):
     enabled: bool = Field(
         default=False,
@@ -112,11 +80,6 @@ class DetectConfig(FrigateBaseModel):
         default_factory=StationaryConfig,
         title="Stationary objects config",
         description="Settings to detect and manage objects that remain stationary for a period of time.",
-    )
-    region_budget: RegionBudgetConfig = Field(
-        default_factory=RegionBudgetConfig,
-        title="Region budget",
-        description="Bounds how much detection work a single camera can generate.",
     )
     annotation_offset: int = Field(
         default=0,

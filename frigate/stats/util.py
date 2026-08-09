@@ -393,10 +393,6 @@ def stats_snapshot(
             "stalls_last_hour": stalls,
         }
 
-        regions_requested = camera_stats.regions_requested.value
-        regions_admitted = camera_stats.regions_admitted.value
-        region_budget = config.cameras[name].detect.region_budget
-
         stats["cameras"][name] = {
             "camera_fps": round(camera_stats.camera_fps.value, 2),
             "process_fps": round(camera_stats.process_fps.value, 2),
@@ -408,11 +404,6 @@ def stats_snapshot(
             "ffmpeg_pid": ffmpeg_pid,
             "audio_rms": round(camera_stats.audio_rms.value, 4),
             "audio_dBFS": round(camera_stats.audio_dBFS.value, 4),
-            "regions_requested": regions_requested,
-            "regions_admitted": regions_admitted,
-            "regions_shed": max(0, regions_requested - regions_admitted),
-            "region_budget": region_budget.max_per_second,
-            "region_budget_enforced": region_budget.enabled,
             **connection_quality,
         }
 

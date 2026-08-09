@@ -657,26 +657,6 @@
         "description": "Use a visual classifier to detect truly stationary objects even when bounding boxes jitter."
       }
     },
-    "region_budget": {
-      "label": "Region budget",
-      "description": "Bounds how much detection work a single camera can generate.",
-      "enabled": {
-        "label": "Enable the region budget",
-        "description": "Cap how many detection regions this camera may run per second so a single busy scene cannot starve the other cameras."
-      },
-      "max_per_second": {
-        "label": "Maximum regions per second",
-        "description": "Maximum detection regions to run per second; leave empty to derive it from the measured speed of the configured detectors."
-      },
-      "min_per_second": {
-        "label": "Minimum regions per second",
-        "description": "Lower bound applied to the derived budget so that a camera is never starved completely."
-      },
-      "explore_fraction": {
-        "label": "Explore fraction",
-        "description": "Share of the budget reserved for regions with little detection history, so that newly active parts of the frame are still sampled."
-      }
-    },
     "annotation_offset": {
       "label": "Annotation offset",
       "description": "Milliseconds to shift detect annotations to better align timeline bounding boxes with recordings; can be positive or negative."

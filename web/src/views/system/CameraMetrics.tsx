@@ -2,7 +2,6 @@ import { useFrigateStats } from "@/api/ws";
 import { CameraLineGraph } from "@/components/graph/LineGraph";
 import CameraInfoDialog from "@/components/overlay/CameraInfoDialog";
 import { ConnectionQualityIndicator } from "@/components/camera/ConnectionQualityIndicator";
-import { RegionBudgetIndicator } from "@/components/camera/RegionBudgetIndicator";
 import { EmptyCard } from "@/components/card/EmptyCard";
 import { Skeleton } from "@/components/ui/skeleton";
 import { FrigateConfig } from "@/types/frigateConfig";
@@ -358,34 +357,6 @@ export default function CameraMetrics({
                                   statsHistory[statsHistory.length - 1]
                                     ?.cameras[camera.name]?.stalls_last_hour ||
                                   0
-                                }
-                              />
-                            )}
-                          {statsHistory.length > 0 &&
-                            statsHistory[statsHistory.length - 1]?.cameras[
-                              camera.name
-                            ] && (
-                              <RegionBudgetIndicator
-                                budget={
-                                  statsHistory[statsHistory.length - 1]
-                                    ?.cameras[camera.name]?.region_budget
-                                }
-                                enforced={
-                                  statsHistory[statsHistory.length - 1]
-                                    ?.cameras[camera.name]
-                                    ?.region_budget_enforced
-                                }
-                                requested={
-                                  statsHistory[statsHistory.length - 1]
-                                    ?.cameras[camera.name]?.regions_requested
-                                }
-                                admitted={
-                                  statsHistory[statsHistory.length - 1]
-                                    ?.cameras[camera.name]?.regions_admitted
-                                }
-                                shed={
-                                  statsHistory[statsHistory.length - 1]
-                                    ?.cameras[camera.name]?.regions_shed
                                 }
                               />
                             )}

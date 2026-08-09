@@ -26,7 +26,6 @@ from frigate.motion import MotionDetector
 from frigate.motion.improved_motion import ImprovedMotionDetector
 from frigate.object_detection.base import RemoteObjectDetector
 from frigate.ptz.autotrack import ptz_moving_at_frame_time
-from frigate.scheduler.budget import RegionBucket
 from frigate.track import ObjectTracker
 from frigate.track.norfair_tracker import NorfairTracker
 from frigate.track.tracked_object import TrackedObjectAttribute
@@ -37,10 +36,6 @@ from frigate.util.image import (
     draw_box_with_label,
 )
 from frigate.util.object import (
-    REGION_SOURCE_MOTION,
-    REGION_SOURCE_STARTUP,
-    REGION_SOURCE_TRACKED,
-    apply_region_budget,
     create_tensor_input,
     get_cluster_candidates,
     get_cluster_region,
@@ -50,7 +45,6 @@ from frigate.util.object import (
     inside_any,
     intersects_any,
     is_object_filtered,
-    rank_sourced_regions,
     reduce_detections,
 )
 from frigate.util.process import FrigateProcess
@@ -215,13 +209,6 @@ def process_frames(
     stationary_frame_counter = 0
     camera_enabled = True
 
-    # meters detection regions per second; spent locally so that the per frame
-    # path stays free of interprocess round trips
-    region_bucket = RegionBucket()
-    budget_requested_total = 0
-    budget_admitted_total = 0
-    budget_flushed_at = time.monotonic()
-
     region_min_size = get_min_region_size(model_config)
 
     attributes_map = model_config.attributes_map
@@ -316,10 +303,7 @@ def process_frames(
         motion_boxes = motion_detector.detect(frame)
 
         regions = []
-        region_sources: list[int] = []
         consolidated_detections = []
-        regions_requested = 0
-        regions_admitted = 0
 
         # if detection is disabled
         if not camera_config.detect.enabled:
@@ -372,7 +356,6 @@ def process_frames(
                     frame_shape, region_min_size, object_boxes
                 )
             ]
-            region_sources = [REGION_SOURCE_TRACKED] * len(regions)
 
             # only add in the motion boxes when not calibrating and a ptz is not moving via autotracking
             # the ptz timestamps are only maintained while autotracking is on, so gate
@@ -408,44 +391,14 @@ def process_frames(
                         for candidate in motion_clusters
                     ]
                     regions += motion_regions
-                    region_sources += [REGION_SOURCE_MOTION] * len(motion_regions)
 
             # if starting up, get the next startup scan region
             if startup_scan:
-                startup_regions = get_startup_regions(
+                for region in get_startup_regions(
                     frame_shape, region_min_size, region_grid
-                )
-                regions += startup_regions
-                region_sources += [REGION_SOURCE_STARTUP] * len(startup_regions)
+                ):
+                    regions.append(region)
                 startup_scan = False
-
-            # order regions so the most valuable are detected on first: when
-            # capacity is short, whatever is submitted first is what survives
-            ranked_regions = rank_sourced_regions(
-                list(zip(region_sources, regions)), frame_shape, region_grid
-            )
-            regions_requested = len(ranked_regions)
-
-            budget = camera_config.detect.region_budget
-            region_bucket.set_rate(budget.max_per_second or 0)
-            allowance = region_bucket.allowance()
-
-            if budget.enabled and budget.max_per_second:
-                regions = apply_region_budget(
-                    ranked_regions, allowance, budget.explore_fraction
-                )
-                regions_admitted = len(regions)
-            else:
-                # observe only: run everything, but record what a live budget
-                # would have admitted so the cap can be tuned before enforcing
-                regions = [region for _, region in ranked_regions]
-                regions_admitted = (
-                    min(allowance, regions_requested)
-                    if budget.max_per_second
-                    else regions_requested
-                )
-
-            region_bucket.consume(regions_admitted)
 
             # resize regions and detect
             # seed with stationary objects
@@ -489,16 +442,6 @@ def process_frames(
             # else, just update the frame times for the stationary objects
             else:
                 object_tracker.update_frame_times(frame_name, frame_time)
-
-        budget_requested_total += regions_requested
-        budget_admitted_total += regions_admitted
-        budget_now = time.monotonic()
-
-        # flush at most once a second, since these counters cross a process boundary
-        if budget_now - budget_flushed_at >= 1.0:
-            camera_metrics.regions_requested.value = budget_requested_total
-            camera_metrics.regions_admitted.value = budget_admitted_total
-            budget_flushed_at = budget_now
 
         # build detections
         detections = {}

@@ -76,7 +76,6 @@ from frigate.record.cleanup import RecordingCleanup
 from frigate.record.export import migrate_exports
 from frigate.record.record import RecordProcess
 from frigate.review.review import ReviewProcess
-from frigate.scheduler.budget import RegionBudgetPublisher
 from frigate.stats.emitter import StatsEmitter
 from frigate.stats.util import stats_init
 from frigate.storage import StorageMaintainer
@@ -394,15 +393,6 @@ class FrigateApp:
                 self.stop_event,
             )
 
-    def start_region_budget(self) -> None:
-        self.region_budget_publisher = RegionBudgetPublisher(
-            self.config,
-            self.inter_config_updater,
-            self.detectors,
-            self.stop_event,
-        )
-        self.region_budget_publisher.start()
-
     def start_ptz_autotracker(self) -> None:
         self.ptz_autotracker_thread = PtzAutoTrackerThread(
             self.config,
@@ -610,7 +600,6 @@ class FrigateApp:
 
         self.init_inter_process_communicator()
         self.start_detectors()
-        self.start_region_budget()
         self.init_dispatcher()
         self.init_profile_manager()
 
@@ -724,7 +713,6 @@ class FrigateApp:
         self.event_cleanup.join()
         self.record_cleanup.join()
         self.stats_emitter.join()
-        self.region_budget_publisher.join()
         self.frigate_watchdog.join()
         self.camera_maintainer.join()
         self.db.stop()
