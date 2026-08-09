@@ -53,7 +53,7 @@ from frigate.util.file import (
 )
 from frigate.util.image import get_image_from_recording, get_image_quality_params
 from frigate.util.media import get_keyframe_before
-from frigate.util.object import create_empty_region_grid
+from frigate.util.object import create_empty_regions_grid
 
 logger = logging.getLogger(__name__)
 
@@ -1084,13 +1084,11 @@ def clear_region_grid(request: Request, camera_name: str):
             status_code=404,
         )
 
-    # store an empty grid stamped with the current time rather than deleting the
-    # row. get_camera_regions_grid only ingests events newer than last_update, so
-    # a missing row is treated as "never built" and gets rebuilt from the camera's
-    # entire event history, which would restore the grid that was just cleared
+    # store an empty grid instead of deleting the row so the grid is
+    # rebuilt from newly tracked objects and not from all past history
     region = {
         Regions.camera: camera_name,
-        Regions.grid: create_empty_region_grid(),
+        Regions.grid: create_empty_regions_grid(),
         Regions.last_update: datetime.now().timestamp(),
     }
     (
@@ -1101,7 +1099,6 @@ def clear_region_grid(request: Request, camera_name: str):
         )
         .execute()
     )
-
     return JSONResponse(
         content={"success": True, "message": "Region grid cleared"},
     )
