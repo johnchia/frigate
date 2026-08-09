@@ -4,6 +4,11 @@ A fork of [blakeblackshear/frigate](https://github.com/blakeblackshear/frigate).
 
 ## Changes on this branch
 
+- **Motion tuner threshold preview.** Draws a patch over the camera image while
+  a motion slider is held, sized by `contour_area` and strobing by `threshold`,
+  so both can be judged against the scene instead of computed by hand. Neither
+  value is in units the image shows: contour area is measured on the downscaled
+  motion frame, and threshold is a luma delta against the running background.
 - **Region grid clear coverage.** Tests for upstream's fix that keeps a cleared
   region grid cleared across a rebuild, which upstream shipped without any.
 - **Devcontainer bytecode.** Sets `PYTHONDONTWRITEBYTECODE` on the devcontainer
