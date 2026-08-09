@@ -26,6 +26,9 @@ services:
     #                     capabilities: [gpu]
     environment:
       YOLO_MODELS: ""
+      # the repo is bind mounted below, so bytecode written inside the container
+      # lands in the host tree owned by root and needs sudo to clean up
+      PYTHONDONTWRITEBYTECODE: "1"
     # devices:
       # - /dev/bus/usb:/dev/bus/usb # Uncomment for Google Coral USB
       # - /dev/dri:/dev/dri # for intel hwaccel, needs to be updated for your hardware
