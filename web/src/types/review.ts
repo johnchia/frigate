@@ -78,6 +78,17 @@ export type RecordingsSummaryDay = {
   hours: RecordingsSummaryHour[];
 };
 
+// a loss Frigate observed and wrote down at the time, so unlike a hole in the
+// recordings table it carries a cause
+export type RecordingGap = {
+  id: string;
+  camera: string;
+  start_time: number;
+  end_time: number;
+  reason: string;
+  segments: number;
+};
+
 export type MotionData = {
   start_time: number;
   motion?: number;

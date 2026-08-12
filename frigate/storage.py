@@ -11,6 +11,8 @@ from peewee import SQL, fn
 from frigate.config import FrigateConfig
 from frigate.const import RECORD_DIR, REPLAY_CAMERA_PREFIX
 from frigate.models import Event, Recordings
+from frigate.record.gaps import RecordingGapRecorder, upsert_recording_gap
+from frigate.record.types import RecordingGapReasonEnum
 from frigate.util.builtin import clear_and_unlink
 
 logger = logging.getLogger(__name__)
@@ -226,6 +228,18 @@ class StorageMaintainer(threading.Thread):
                     pass
         else:
             logger.info(f"Cleaned up {deleted_segments_size:.2f} MB of recordings")
+
+        # footage deleted to make room is gone before its retention asked for
+        # it to be, which is a coverage loss and not an ordinary expiry
+        gap_recorder = RecordingGapRecorder(upsert_recording_gap)
+        for recording in deleted_recordings:
+            gap_recorder.record(
+                recording.camera,
+                RecordingGapReasonEnum.storage_pressure,
+                recording.start_time,
+                recording.end_time,
+            )
+        gap_recorder.flush()
 
         logger.debug(f"Expiring {len(deleted_recordings)} recordings")
         # delete up to 100,000 at a time

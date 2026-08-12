@@ -133,6 +133,23 @@ class Previews(Model):
     duration = FloatField()
 
 
+class RecordingGaps(Model):
+    """A stretch of time where recording was expected but is missing.
+
+    One row covers a whole incident rather than a single lost segment: the
+    writer extends an open range while consecutive losses share a reason, so a
+    camera down for six hours is one row and not thousands.
+    """
+
+    id = CharField(null=False, primary_key=True, max_length=30)
+    camera = CharField(index=True, max_length=20)
+    start_time = DateTimeField(index=True)
+    end_time = DateTimeField()
+    reason = CharField(max_length=30)
+    # how many individual losses were merged into this range
+    segments = IntegerField(default=1)
+
+
 # Used for temporary table in record/cleanup.py
 class RecordingsToDelete(Model):
     id = CharField(null=False, primary_key=False, max_length=30)

@@ -6,7 +6,12 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { isDesktop, isMobile } from "react-device-detect";
 import GeneralMetrics from "@/views/system/GeneralMetrics";
 import StorageMetrics from "@/views/system/StorageMetrics";
-import { LuActivity, LuHardDrive, LuSearchCode } from "react-icons/lu";
+import {
+  LuActivity,
+  LuGrid2X2,
+  LuHardDrive,
+  LuSearchCode,
+} from "react-icons/lu";
 import { FaVideo } from "react-icons/fa";
 import Logo from "@/components/Logo";
 import useOptimisticState from "@/hooks/use-optimistic-state";
@@ -15,9 +20,16 @@ import { useHashState } from "@/hooks/use-overlay-state";
 import { Toaster } from "@/components/ui/sonner";
 import { FrigateConfig } from "@/types/frigateConfig";
 import EnrichmentMetrics from "@/views/system/EnrichmentMetrics";
+import RecordingCoverage from "@/views/system/RecordingCoverage";
 import { useTranslation } from "react-i18next";
 
-const allMetrics = ["general", "enrichments", "storage", "cameras"] as const;
+const allMetrics = [
+  "general",
+  "enrichments",
+  "storage",
+  "coverage",
+  "cameras",
+] as const;
 type SystemMetric = (typeof allMetrics)[number];
 
 function System() {
@@ -101,6 +113,7 @@ function System() {
               {item == "general" && <LuActivity className="size-4" />}
               {item == "enrichments" && <LuSearchCode className="size-4" />}
               {item == "storage" && <LuHardDrive className="size-4" />}
+              {item == "coverage" && <LuGrid2X2 className="size-4" />}
               {item == "cameras" && <FaVideo className="size-4" />}
               {isDesktop && (
                 <div className="smart-capitalize">{t(item + ".title")}</div>
@@ -147,6 +160,11 @@ function System() {
       {visitedTabs.has("storage") && (
         <div className={page == "storage" ? "contents" : "hidden"}>
           <StorageMetrics setLastUpdated={setLastUpdated} />
+        </div>
+      )}
+      {visitedTabs.has("coverage") && (
+        <div className={page == "coverage" ? "contents" : "hidden"}>
+          <RecordingCoverage cameras={Object.values(config?.cameras ?? {})} />
         </div>
       )}
       {visitedTabs.has("cameras") && (

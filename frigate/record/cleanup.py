@@ -13,7 +13,13 @@ from playhouse.sqlite_ext import SqliteExtDatabase
 
 from frigate.config import CameraConfig, FrigateConfig, RetainModeEnum
 from frigate.const import CACHE_DIR, CLIPS_DIR, MAX_WAL_SIZE, RECORD_DIR
-from frigate.models import Previews, Recordings, ReviewSegment, UserReviewStatus
+from frigate.models import (
+    Previews,
+    RecordingGaps,
+    Recordings,
+    ReviewSegment,
+    UserReviewStatus,
+)
 from frigate.util.builtin import clear_and_unlink
 from frigate.util.media import remove_empty_directories
 
@@ -280,10 +286,37 @@ class RecordingCleanup(threading.Thread):
 
         return maybe_empty_dirs
 
+    def expire_recording_gaps(self) -> None:
+        """Delete gap records for time no longer covered by any retention."""
+        for camera, config in self.config.cameras.items():
+            # a gap is only meaningful while the footage it describes could
+            # still have been on disk, so it outlives nothing
+            expire_days = max(
+                config.record.continuous.days,
+                config.record.motion.days,
+                config.record.alerts.retain.days,
+                config.record.detections.retain.days,
+            )
+            expire_before = (
+                datetime.datetime.now() - datetime.timedelta(days=expire_days)
+            ).timestamp()
+
+            RecordingGaps.delete().where(
+                RecordingGaps.camera == camera,
+                RecordingGaps.end_time < expire_before,
+            ).execute()
+
+        # and drop anything belonging to a camera that no longer exists
+        RecordingGaps.delete().where(
+            RecordingGaps.camera.not_in(list(self.config.cameras.keys()))  # type: ignore[call-arg, arg-type, misc]
+        ).execute()
+
     def expire_recordings(self) -> set[Path]:
         """Delete recordings based on retention config."""
         logger.debug("Start expire recordings.")
         logger.debug("Start deleted cameras.")
+
+        self.expire_recording_gaps()
 
         # Handle deleted cameras
         expire_days = max(
