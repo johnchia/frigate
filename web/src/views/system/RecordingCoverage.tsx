@@ -3,6 +3,7 @@ import useSWR from "swr";
 import { useTranslation } from "react-i18next";
 import { TZDate } from "react-day-picker";
 import { CiCircleAlert } from "react-icons/ci";
+import { LuChevronRight } from "react-icons/lu";
 import {
   Popover,
   PopoverContent,
@@ -10,9 +11,13 @@ import {
 } from "@/components/ui/popover";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import ActivityIndicator from "@/components/indicators/activity-indicator";
+import { useNavigate } from "react-router-dom";
 import { CameraConfig, FrigateConfig } from "@/types/frigateConfig";
 import { RecordingGap, RecordingsSummaryDay } from "@/types/review";
-import { useTimezone } from "@/hooks/use-date-utils";
+import { RecordingStartingPoint } from "@/types/record";
+import { use24HourTime, useTimezone } from "@/hooks/use-date-utils";
+import { useDateLocale } from "@/hooks/use-date-locale";
+import { formatUnixTimestampToDateTime } from "@/utils/dateUtil";
 import { cn } from "@/lib/utils";
 
 const RANGE_OPTIONS = [7, 14, 30] as const;
@@ -79,6 +84,21 @@ function pad2(value: number): string {
 }
 
 /** Format a duration in seconds as a compact human string. */
+/**
+ * Render a gap length.
+ *
+ * Unlike the card totals this keeps seconds, because a gap is something you
+ * go and look at: rounding a 52 second hole to "1m" makes it harder to find.
+ */
+function formatGapLength(seconds: number): string {
+  const total = Math.round(seconds);
+  if (total < 60) return `${total}s`;
+
+  const minutes = Math.floor(total / 60);
+  const remainder = total % 60;
+  return remainder === 0 ? `${minutes}m` : `${minutes}m ${remainder}s`;
+}
+
 function formatMissing(seconds: number): string {
   const total = Math.round(seconds);
   if (total < 60) return `${total}s`;
@@ -551,8 +571,115 @@ function CameraCoverageCard({
           />
 
           <HourProfile profile={model.profile} />
+
+          <GapIncidents gaps={gaps ?? []} camera={camera.name} />
         </>
       )}
+    </div>
+  );
+}
+
+// start playback a little before the loss: watching footage run into the hole
+// is what separates a real gap from a seek that landed badly
+const GAP_LEAD_SECONDS = 15;
+const MAX_LISTED_GAPS = 10;
+
+type GapIncidentsProps = {
+  gaps: RecordingGap[];
+  camera: string;
+};
+
+/**
+ * List individual losses with the time they happened.
+ *
+ * The heatmap answers how much is missing, which is the wrong question when
+ * you want to check whether it is really missing. That needs a timestamp
+ * precise enough to seek to, so each row opens the recording at the moment
+ * the footage stops.
+ */
+function GapIncidents({ gaps, camera }: GapIncidentsProps) {
+  const { t } = useTranslation(["views/system", "common"]);
+  const navigate = useNavigate();
+  const { data: config } = useSWR<FrigateConfig>("config");
+  const is24Hour = use24HourTime(config);
+  const locale = useDateLocale();
+
+  const recent = useMemo(
+    () =>
+      [...gaps]
+        .sort((a, b) => b.start_time - a.start_time)
+        .slice(0, MAX_LISTED_GAPS),
+    [gaps],
+  );
+
+  const openTimeline = useCallback(
+    (gap: RecordingGap) => {
+      navigate("/review", {
+        state: {
+          recording: {
+            camera,
+            startTime: Math.max(0, gap.start_time - GAP_LEAD_SECONDS),
+            severity: "alert",
+          } satisfies RecordingStartingPoint,
+        },
+      });
+    },
+    [camera, navigate],
+  );
+
+  const formatWhen = useCallback(
+    (timestamp: number) =>
+      formatUnixTimestampToDateTime(timestamp, {
+        timezone: config?.ui.timezone,
+        date_format: t(
+          `time.formattedTimestamp.${is24Hour ? "24hour" : "12hour"}`,
+          { ns: "common" },
+        ),
+        locale,
+      }),
+    [config, is24Hour, locale, t],
+  );
+
+  if (recent.length === 0) return null;
+
+  return (
+    <div className="mt-3">
+      <div className="flex flex-row items-baseline justify-between gap-2">
+        <span className="text-xs font-medium text-primary-variant">
+          {t("coverage.incidents.title")}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          {gaps.length > recent.length
+            ? t("coverage.incidents.showing", {
+                shown: recent.length,
+                total: gaps.length,
+              })
+            : t("coverage.incidents.hint")}
+        </span>
+      </div>
+
+      <div className="mt-1 flex flex-col">
+        {recent.map((gap) => (
+          <button
+            key={gap.id}
+            type="button"
+            onClick={() => openTimeline(gap)}
+            title={gap.detail ?? undefined}
+            className="group flex cursor-pointer flex-row items-baseline gap-2 rounded px-1 py-0.5 text-left text-xs hover:bg-secondary"
+          >
+            <span className="shrink-0 tabular-nums text-primary">
+              {formatWhen(gap.start_time)}
+            </span>
+            <span className="shrink-0 tabular-nums text-muted-foreground">
+              {formatGapLength(gap.end_time - gap.start_time)}
+            </span>
+            <span className="truncate text-muted-foreground">
+              {t(`coverage.reason.${gap.reason}`)}
+            </span>
+            <LuChevronRight className="ml-auto size-3 shrink-0 self-center text-muted-foreground opacity-0 group-hover:opacity-100" />
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
