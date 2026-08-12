@@ -61,6 +61,23 @@ export type RecordingsSummary = {
   [day: string]: boolean;
 };
 
+// hourly rollup returned by GET /{camera}/recordings/summary. `duration` is the
+// summed length in seconds of the segments kept for that hour, so it is the
+// numerator of the recording coverage ratio against a full 3600s hour.
+export type RecordingsSummaryHour = {
+  hour: string;
+  events: number;
+  motion: number | null;
+  objects: number | null;
+  duration: number;
+};
+
+export type RecordingsSummaryDay = {
+  day: string;
+  events: number;
+  hours: RecordingsSummaryHour[];
+};
+
 export type MotionData = {
   start_time: number;
   motion?: number;

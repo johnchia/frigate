@@ -21,6 +21,27 @@
   }
 }
 
+/* Recording coverage heatmap ramp. One hue, four ordinal steps, encoding how
+   much of an hour is MISSING rather than how much is present, so that healthy
+   hours recede into the surface and losses are what draws the eye.
+   Each mode's steps are chosen against that mode's surface rather than flipped
+   from the other: in both, a bigger loss means more contrast with the
+   background, which is why the dark steps run in the opposite lightness
+   direction. Blue rather than red because red already means alert in this UI. */
+:root {
+  --coverage-loss-1: #86b6ef;
+  --coverage-loss-2: #5598e7;
+  --coverage-loss-3: #256abf;
+  --coverage-loss-4: #104281;
+}
+
+.dark {
+  --coverage-loss-1: #184f95;
+  --coverage-loss-2: #5598e7;
+  --coverage-loss-3: #9ec5f4;
+  --coverage-loss-4: #cde2fb;
+}
+
 @layer utilities {
   .scrollbar-container {
     @apply scrollbar-thin scrollbar-track-background_alt scrollbar-thumb-border scrollbar-track-rounded-full scrollbar-thumb-rounded-full;
