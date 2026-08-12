@@ -154,7 +154,7 @@
   },
   "coverage": {
     "title": "Coverage",
-    "tips": "Every cell is one hour, shaded by how much of that hour is missing from the recordings database. Frigate discards recording segments when the recording mover falls behind, when a stream drops, or when storage runs short, and today those losses only appear in the logs. This grid shows where they landed.",
+    "tips": "Every cell is one hour, shaded by how much of that hour is missing from the recordings database. Hover a cell for the detail.",
     "range": {
       "label": "Range",
       "option": "{{days}}d"
@@ -166,8 +166,7 @@
     "affectedHours_one": "{{count}} hour affected",
     "affectedHours_other": "{{count}} hours affected",
     "eventOnly": {
-      "title": "Event recordings only",
-      "description": "Continuous retention is off for this camera, so empty hours are expected and there is no coverage percentage to report. The grid below shows when footage was kept, not when it was lost."
+      "title": "Event recordings only, so empty hours are expected"
     },
     "legend": {
       "label": "Missing",
@@ -186,10 +185,8 @@
       "empty": "{{date}}, {{hour}}: no footage kept"
     },
     "profile": {
-      "title": "By hour of day",
-      "description": "Each hour slot averaged across the whole range. A dip in one column means recordings go missing at the same time every day, which usually points at a scheduled job rather than a camera."
+      "title": "By hour of day"
     },
-    "hint": "Hover a cell for detail.",
     "empty": "No recordings for this camera yet.",
     "noCameras": "No cameras have recording enabled.",
     "heading": "Recording Coverage",
@@ -206,14 +203,17 @@
       "stream_disconnected": "Camera stream disconnected",
       "stream_stalled": "Camera stopped sending video",
       "frigate_restart": "Frigate was not running",
-      "none": "No causes recorded yet. Causes are only known from when they happen, so footage missing from before this version was installed has none."
+      "none": "No causes recorded yet"
     },
     "unexplained": "cause not recorded",
     "incidents": {
       "title": "When footage went missing",
       "hint": "Select one to open it in the timeline",
       "showing": "showing {{shown}} of {{total}}"
-    }
+    },
+    "tipsProfile": "The bottom row averages each hour slot across the whole range. A dip in one column means recordings go missing at the same time every day, which usually points at a scheduled job rather than a camera.",
+    "tipsCauses": "Causes are recorded as they happen and are never backfilled, so footage lost before this version was installed shows no cause.",
+    "tipsEventOnly": "Cameras without continuous retention get no coverage percentage: an empty hour means nothing happened rather than something broke, so the grid shows when footage was kept."
   },
   "cameras": {
     "title": "Cameras",

@@ -145,6 +145,44 @@ export default function RecordingCoverage({ cameras }: RecordingCoverageProps) {
     [cameras],
   );
 
+  // the window the grid can show, used to bound the gap query
+  const gapWindow = useMemo(() => {
+    const before = Date.now() / 1000;
+    return { after: before - rangeDays * 86400, before };
+  }, [rangeDays]);
+
+  // one request for every camera rather than one each: the feed needs them all
+  // together anyway, and the cards only ever want a slice of the same answer
+  const cameraList = useMemo(
+    () => recordingCameras.map((cam) => cam.name).join(","),
+    [recordingCameras],
+  );
+
+  const { data: gaps } = useSWR<RecordingGap[]>(
+    cameraList
+      ? [
+          "recordings/gaps",
+          {
+            cameras: cameraList,
+            after: Math.floor(gapWindow.after),
+            before: Math.ceil(gapWindow.before),
+          },
+        ]
+      : null,
+  );
+
+  const gapsByCamera = useMemo(() => {
+    const byCamera = new Map<string, RecordingGap[]>();
+
+    for (const gap of gaps ?? []) {
+      const existing = byCamera.get(gap.camera);
+      if (existing) existing.push(gap);
+      else byCamera.set(gap.camera, [gap]);
+    }
+
+    return byCamera;
+  }, [gaps]);
+
   return (
     <div className="scrollbar-container mt-4 flex size-full flex-col overflow-y-auto">
       <div className="flex flex-row items-center justify-between">
@@ -159,8 +197,13 @@ export default function RecordingCoverage({ cameras }: RecordingCoverageProps) {
                 <CiCircleAlert className="size-5" />
               </button>
             </PopoverTrigger>
-            <PopoverContent className="w-80">
-              <div className="space-y-2 text-sm">{t("coverage.tips")}</div>
+            <PopoverContent className="w-96">
+              <div className="space-y-2 text-sm">
+                <p>{t("coverage.tips")}</p>
+                <p>{t("coverage.tipsProfile")}</p>
+                <p>{t("coverage.tipsCauses")}</p>
+                <p>{t("coverage.tipsEventOnly")}</p>
+              </div>
             </PopoverContent>
           </Popover>
         </div>
@@ -185,6 +228,8 @@ export default function RecordingCoverage({ cameras }: RecordingCoverageProps) {
         </ToggleGroup>
       </div>
 
+      <GapFeed gaps={gaps ?? []} />
+
       <CoverageLegend />
 
       {recordingCameras.length === 0 ? (
@@ -199,6 +244,8 @@ export default function RecordingCoverage({ cameras }: RecordingCoverageProps) {
               camera={camera}
               rangeDays={rangeDays}
               timezone={timezone}
+              gaps={gapsByCamera.get(camera.name) ?? EMPTY_GAPS}
+              gapWindow={gapWindow}
             />
           ))}
         </div>
@@ -241,16 +288,25 @@ function CoverageLegend() {
   );
 }
 
+// a stable identity so a camera with no gaps does not remount its memos
+const EMPTY_GAPS: RecordingGap[] = [];
+
+type GapWindow = { after: number; before: number };
+
 type CameraCoverageCardProps = {
   camera: CameraConfig;
   rangeDays: number;
   timezone: string;
+  gaps: RecordingGap[];
+  gapWindow: GapWindow;
 };
 
 function CameraCoverageCard({
   camera,
   rangeDays,
   timezone,
+  gaps,
+  gapWindow,
 }: CameraCoverageCardProps) {
   const { t } = useTranslation(["views/system"]);
   const reasonText = useReasonText();
@@ -259,21 +315,6 @@ function CameraCoverageCard({
   const { data: summary } = useSWR<RecordingsSummaryDay[]>([
     `${camera.name}/recordings/summary`,
     { timezone },
-  ]);
-
-  // the window the grid can show, used to bound the gap query
-  const gapWindow = useMemo(() => {
-    const before = Date.now() / 1000;
-    return { after: before - rangeDays * 86400, before };
-  }, [rangeDays]);
-
-  const { data: gaps } = useSWR<RecordingGap[]>([
-    "recordings/gaps",
-    {
-      cameras: camera.name,
-      after: Math.floor(gapWindow.after),
-      before: Math.ceil(gapWindow.before),
-    },
   ]);
 
   // continuous retention is what makes a coverage percentage meaningful: with
@@ -285,7 +326,7 @@ function CameraCoverageCard({
   const reasonsByHour = useMemo(() => {
     const byHour = new Map<number, Map<string, number>>();
 
-    for (const gap of gaps ?? []) {
+    for (const gap of gaps) {
       const firstHour = Math.floor(gap.start_time / SECONDS_PER_HOUR);
       const lastHour = Math.floor((gap.end_time - 0.001) / SECONDS_PER_HOUR);
 
@@ -310,7 +351,7 @@ function CameraCoverageCard({
   const causeTotals = useMemo(() => {
     const totals = new Map<string, Cause>();
 
-    for (const gap of gaps ?? []) {
+    for (const gap of gaps) {
       const start = Math.max(gap.start_time, gapWindow.after);
       const end = Math.min(gap.end_time, gapWindow.before);
 
@@ -528,9 +569,7 @@ function CameraCoverageCard({
         <div className="font-medium smart-capitalize">
           {camera.name.replaceAll("_", " ")}
         </div>
-        <div className="text-xs text-muted-foreground">
-          {readout ?? (model ? t("coverage.hint") : "")}
-        </div>
+        <div className="text-xs text-muted-foreground">{readout ?? ""}</div>
       </div>
 
       {!summary ? (
@@ -556,11 +595,8 @@ function CameraCoverageCard({
               />
             </>
           ) : (
-            <div className="mt-2 rounded-md bg-background p-2 text-xs text-muted-foreground">
-              <span className="font-medium text-primary-variant">
-                {t("coverage.eventOnly.title")}
-              </span>{" "}
-              {t("coverage.eventOnly.description")}
+            <div className="mt-1 text-xs text-muted-foreground">
+              {t("coverage.eventOnly.title")}
             </div>
           )}
 
@@ -571,8 +607,6 @@ function CameraCoverageCard({
           />
 
           <HourProfile profile={model.profile} />
-
-          <GapIncidents gaps={gaps ?? []} camera={camera.name} />
         </>
       )}
     </div>
@@ -582,22 +616,24 @@ function CameraCoverageCard({
 // start playback a little before the loss: watching footage run into the hole
 // is what separates a real gap from a seek that landed badly
 const GAP_LEAD_SECONDS = 15;
-const MAX_LISTED_GAPS = 10;
+const MAX_LISTED_GAPS = 100;
 
-type GapIncidentsProps = {
+type GapFeedProps = {
   gaps: RecordingGap[];
-  camera: string;
 };
 
 /**
- * List individual losses with the time they happened.
+ * Every loss across every camera, newest first.
  *
  * The heatmap answers how much is missing, which is the wrong question when
  * you want to check whether it is really missing. That needs a timestamp
- * precise enough to seek to, so each row opens the recording at the moment
- * the footage stops.
+ * precise enough to seek to, so each row opens the recording at the moment the
+ * footage stops. Keeping one feed rather than a list per card also puts
+ * losses from different cameras next to each other, which is what shows a
+ * shared cause: two cameras failing in the same second is the host or the
+ * network, not either camera.
  */
-function GapIncidents({ gaps, camera }: GapIncidentsProps) {
+function GapFeed({ gaps }: GapFeedProps) {
   const { t } = useTranslation(["views/system", "common"]);
   const navigate = useNavigate();
   const { data: config } = useSWR<FrigateConfig>("config");
@@ -617,14 +653,14 @@ function GapIncidents({ gaps, camera }: GapIncidentsProps) {
       navigate("/review", {
         state: {
           recording: {
-            camera,
+            camera: gap.camera,
             startTime: Math.max(0, gap.start_time - GAP_LEAD_SECONDS),
             severity: "alert",
           } satisfies RecordingStartingPoint,
         },
       });
     },
-    [camera, navigate],
+    [navigate],
   );
 
   const formatWhen = useCallback(
@@ -643,9 +679,9 @@ function GapIncidents({ gaps, camera }: GapIncidentsProps) {
   if (recent.length === 0) return null;
 
   return (
-    <div className="mt-3">
+    <div className="mt-2 rounded-lg bg-background_alt p-2.5 md:rounded-2xl">
       <div className="flex flex-row items-baseline justify-between gap-2">
-        <span className="text-xs font-medium text-primary-variant">
+        <span className="text-sm font-medium">
           {t("coverage.incidents.title")}
         </span>
         <span className="text-xs text-muted-foreground">
@@ -658,23 +694,30 @@ function GapIncidents({ gaps, camera }: GapIncidentsProps) {
         </span>
       </div>
 
-      <div className="mt-1 flex flex-col">
+      <div className="scrollbar-container mt-1 flex max-h-56 flex-col overflow-y-auto">
         {recent.map((gap) => (
           <button
             key={gap.id}
             type="button"
             onClick={() => openTimeline(gap)}
             title={gap.detail ?? undefined}
-            className="group flex cursor-pointer flex-row items-baseline gap-2 rounded px-1 py-0.5 text-left text-xs hover:bg-secondary"
+            className="group flex cursor-pointer flex-row items-baseline gap-3 rounded px-1 py-0.5 text-left text-xs hover:bg-secondary"
           >
             <span className="shrink-0 tabular-nums text-primary">
               {formatWhen(gap.start_time)}
             </span>
-            <span className="shrink-0 tabular-nums text-muted-foreground">
+            <span className="w-28 shrink-0 truncate font-medium smart-capitalize">
+              {gap.camera.replaceAll("_", " ")}
+            </span>
+            <span className="w-12 shrink-0 tabular-nums text-muted-foreground">
               {formatGapLength(gap.end_time - gap.start_time)}
             </span>
-            <span className="truncate text-muted-foreground">
+            <span className="w-52 shrink-0 truncate text-muted-foreground">
               {t(`coverage.reason.${gap.reason}`)}
+            </span>
+            {/* the evidence is the diagnosis, so give it the spare width */}
+            <span className="hidden flex-1 truncate font-mono text-[11px] text-muted-foreground opacity-80 lg:block">
+              {gap.detail}
             </span>
             <LuChevronRight className="ml-auto size-3 shrink-0 self-center text-muted-foreground opacity-0 group-hover:opacity-100" />
           </button>
@@ -925,9 +968,6 @@ function HourProfile({ profile }: HourProfileProps) {
             );
           })}
         </div>
-      </div>
-      <div className="ml-[52px] mt-1 text-[10px] text-muted-foreground">
-        {t("coverage.profile.description")}
       </div>
     </div>
   );
