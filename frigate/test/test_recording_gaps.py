@@ -273,55 +273,94 @@ class TestStreamAbsenceTracker(unittest.TestCase):
             recorder=RecordingGapRecorder(self.written.append),
         )
 
-    def feed(self, *starts: float) -> None:
-        for start in starts:
-            self.tracker.note_segment(start)
+    def feed(self, *segments: tuple[float, float | None]) -> None:
+        for start, end in segments:
+            self.tracker.note_segment(start, end)
 
     def test_a_healthy_sequence_books_nothing(self):
-        self.feed(1000.0, 1010.0, 1020.0, 1030.0)
+        self.feed((1000.0, 1013.0), (1013.0, 1026.0), (1026.0, 1039.0))
 
         self.assertEqual(self.written, [])
 
     def test_the_first_segment_alone_books_nothing(self):
         """There is no timeline to compare against yet."""
-        self.feed(1000.0)
+        self.feed((1000.0, 1013.0))
 
         self.assertEqual(self.written, [])
 
-    def test_boundary_drift_is_not_a_gap(self):
-        # a segment arriving a few seconds late is normal
-        self.feed(1000.0, 1014.0, 1027.0)
+    def test_whole_second_filenames_are_not_a_gap(self):
+        # segment names carry whole seconds, so a boundary can be off by one
+        self.feed((1000.0, 1013.0), (1014.0, 1027.0), (1028.0, 1041.0))
 
         self.assertEqual(self.written, [])
 
-    def test_a_skipped_segment_is_booked_with_exact_bounds(self):
-        self.feed(1000.0, 1060.0)
+    def test_a_long_segment_is_not_a_gap(self):
+        """A stream copy cuts on keyframes, so segments outrun their length.
+
+        Measuring from the configured length instead of the real end reported
+        the overshoot as missing footage that was never missing.
+        """
+        self.feed((1000.0, 1041.0), (1041.0, 1054.0))
+
+        self.assertEqual(self.written, [])
+
+    def test_a_hole_is_booked_from_the_real_end(self):
+        self.feed((1000.0, 1013.0), (1020.0, 1033.0))
 
         self.assertEqual(len(self.written), 1)
         gap = self.written[0]
-        # the loss runs from the end of the last segment to the start of the next
-        self.assertEqual(gap["start_time"], 1010.0)
-        self.assertEqual(gap["end_time"], 1060.0)
+        # from where the last segment actually stopped, not where it was due to
+        self.assertEqual(gap["start_time"], 1013.0)
+        self.assertEqual(gap["end_time"], 1020.0)
 
-    def test_a_short_dropout_is_booked(self):
-        """The whole point: well under the old 120s staleness threshold."""
-        self.feed(1000.0, 1040.0)
+    def test_overshoot_is_not_counted_as_part_of_the_hole(self):
+        """Observed on a real camera: 13s segments against a nominal 10.
+
+        A next-segment start 16s after the last one means 3s went missing, not
+        6s. Measuring from the nominal end inflated every gap by the overshoot.
+        """
+        self.feed((1000.0, 1013.0), (1016.0, 1029.0))
+
+        gap = self.written[0]
+        self.assertEqual(gap["start_time"], 1013.0)
+        self.assertEqual(gap["end_time"] - gap["start_time"], 3.0)
+
+    def test_a_hole_shorter_than_a_segment_is_booked(self):
+        """The nominal length hid anything smaller than half a segment."""
+        self.feed((1000.0, 1013.0), (1016.0, 1029.0))
 
         self.assertEqual(len(self.written), 1)
         self.assertEqual(
-            self.written[0]["end_time"] - self.written[0]["start_time"], 30
+            self.written[0]["end_time"] - self.written[0]["start_time"], 3.0
         )
+
+    def test_a_segment_without_a_probed_end_falls_back_to_nominal(self):
+        # an unreadable segment is exactly the one whose duration cannot be
+        # trusted, so its configured length has to stand in
+        self.feed((1000.0, None), (1030.0, 1043.0))
+
+        self.assertEqual(len(self.written), 1)
+        self.assertEqual(self.written[0]["start_time"], 1010.0)
+
+    def test_a_late_arrival_does_not_look_like_a_hole(self):
+        self.feed((1000.0, 1013.0), (1100.0, 1113.0))
+        self.written.clear()
+
+        # the segment that was still being probed when the newer one published
+        self.feed((1013.0, 1026.0))
+
+        self.assertEqual(self.written, [])
 
     def test_a_process_exit_names_the_cause(self):
         self.tracker.note_process_exit(1, ["Connection timed out"], now=1030.0)
-        self.feed(1000.0, 1060.0)
+        self.feed((1000.0, 1013.0), (1060.0, 1073.0))
 
         gap = self.written[0]
         self.assertEqual(gap["reason"], "stream_disconnected")
         self.assertIn("Connection timed out", gap["detail"])
 
     def test_without_an_exit_the_stream_is_blamed_for_stalling(self):
-        self.feed(1000.0, 1060.0)
+        self.feed((1000.0, 1013.0), (1060.0, 1073.0))
 
         gap = self.written[0]
         self.assertEqual(gap["reason"], "stream_stalled")
@@ -329,30 +368,30 @@ class TestStreamAbsenceTracker(unittest.TestCase):
 
     def test_an_unrelated_old_exit_is_not_blamed(self):
         self.tracker.note_process_exit(1, ["ancient history"], now=100.0)
-        self.feed(1000.0, 1060.0)
+        self.feed((1000.0, 1013.0), (1060.0, 1073.0))
 
         self.assertEqual(self.written[0]["reason"], "stream_stalled")
 
     def test_reset_stops_a_disable_looking_like_loss(self):
-        self.feed(1000.0)
+        self.feed((1000.0, 1013.0))
         self.tracker.reset()
         # the camera comes back an hour later, which is not a gap
-        self.feed(4600.0, 4610.0)
+        self.feed((4600.0, 4613.0), (4613.0, 4626.0))
 
         self.assertEqual(self.written, [])
 
     def test_an_ongoing_outage_is_not_counted_twice_on_recovery(self):
-        self.feed(1000.0)
+        self.feed((1000.0, 1013.0))
 
         # booked while still running, the way the staleness check does it
-        self.tracker.book(1000.0, 1200.0)
+        self.tracker.book(1013.0, 1200.0)
         # then footage resumes and the same stretch is seen from the timeline
-        self.feed(1250.0)
+        self.feed((1250.0, 1263.0))
 
         # one incident, and the covered span is contiguous rather than doubled
         self.assertEqual(len({gap["id"] for gap in self.written}), 1)
         final = self.written[-1]
-        self.assertEqual(final["start_time"], 1000.0)
+        self.assertEqual(final["start_time"], 1013.0)
         self.assertEqual(final["end_time"], 1250.0)
 
     def test_booking_backwards_is_ignored(self):

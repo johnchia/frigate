@@ -28,6 +28,11 @@ MIN_COALESCE_TOLERANCE = 30
 # ones.
 MAX_DETAIL_LENGTH = 255
 
+# Segment cache filenames are stamped to the second, so a segment's recorded
+# end and the next one's start can disagree by about a second with nothing
+# actually missing between them.
+SEGMENT_BOUNDARY_JITTER = 2.0
+
 
 def trim_detail(detail: str | None) -> str | None:
     """Reduce evidence to something that fits the column, keeping the tail."""
@@ -174,7 +179,7 @@ class StreamAbsenceTracker:
         self.segment_time = segment_time
         self.poll_interval = poll_interval
         self.recorder = recorder
-        self.last_segment_start: float = 0
+        self.last_segment_end: float = 0
         self.booked_until: float = 0
         self.exit_time: float = 0
         self.exit_detail: str | None = None
@@ -185,28 +190,41 @@ class StreamAbsenceTracker:
         Disabling a camera or reloading its config is not lost footage, so the
         stretches either side of the change must not be joined into a gap.
         """
-        self.last_segment_start = 0
+        self.last_segment_end = 0
         self.booked_until = 0
 
-    def note_segment(self, segment_time: float | None) -> None:
-        """Track that a segment existed, booking anything skipped before it."""
-        if segment_time is None:
+    def note_segment(
+        self, start_time: float | None, end_time: float | None = None
+    ) -> None:
+        """Track that a segment existed, booking anything skipped before it.
+
+        The end is where the previous segment actually stopped, not where its
+        configured length said it would. A stream copy can only cut on a
+        keyframe, so segments regularly outrun the configured length, and
+        measuring from the nominal end reports that overshoot as missing
+        footage that was never missing.
+        """
+        if start_time is None:
             return
 
-        previous = self.last_segment_start
-        self.last_segment_start = max(previous, segment_time)
+        previous_end = self.last_segment_end
 
-        if previous <= 0 or segment_time <= previous:
+        # a segment that could not be probed has no trustworthy duration, so
+        # its nominal length is the best guess available for where it ended
+        self.last_segment_end = max(
+            previous_end,
+            end_time if end_time else start_time + self.segment_time,
+        )
+
+        if previous_end <= 0:
             return
 
-        expected_end = previous + self.segment_time
-
-        # segment boundaries drift, so only call it a hole once more than half
-        # a segment is unaccounted for
-        if segment_time <= expected_end + (self.segment_time / 2):
+        # segment filenames carry whole seconds, so a boundary can look off by
+        # about a second in either direction without anything being wrong
+        if start_time <= previous_end + SEGMENT_BOUNDARY_JITTER:
             return
 
-        self.book(expected_end, segment_time)
+        self.book(previous_end, start_time)
 
     def note_process_exit(
         self, returncode: int | None, output: Iterable[str], now: float | None = None

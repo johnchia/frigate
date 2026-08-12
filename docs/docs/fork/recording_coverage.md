@@ -249,6 +249,19 @@ only noticed absence after roughly two minutes of silence, which meant the
 common case, a camera that drops its connection for thirty to ninety seconds
 and reconnects, was never recorded at all.
 
+A gap runs from where the previous segment actually ended to where the next one
+started. That distinction matters more than it sounds: a stream copy can only
+cut on a keyframe, so a segment routinely outruns the configured segment length
+and a camera set to ten second segments may write thirteen. Measuring from the
+configured length instead of the real end would report that overshoot as
+missing footage, inflating every gap by a few seconds and, on a camera with a
+long keyframe interval, inventing gaps outright.
+
+Because the boundaries are real rather than nominal, losses well under one
+segment are reported. Segment filenames are stamped to the whole second, so
+boundaries either side of a cut can disagree by about a second with nothing
+wrong; anything within that is ignored.
+
 An outage that is still running is booked before it ends, so a camera that
 never comes back is still reported. Each booking starts where the last one
 ended, so the same stretch is not counted twice when footage resumes.

@@ -20,6 +20,9 @@ A fork of [blakeblackshear/frigate](https://github.com/blakeblackshear/frigate).
 - **Diagnosable stream dropouts.** Absence is counted from the segment sequence
   rather than from a two minute staleness timer, so the common case of a camera
   dropping its connection for under a minute is recorded instead of vanishing.
+  Boundaries come from each segment's real end rather than its configured
+  length, since a stream copy only cuts on keyframes and the resulting
+  overshoot would otherwise be reported as missing footage.
   Each gap is classified by evidence gathered as it happened: whether the
   recording process exited (`stream_disconnected`, carrying ffmpeg's own exit
   code and error, so `401 Unauthorized` and `Connection timed out` are told

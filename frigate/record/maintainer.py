@@ -466,9 +466,13 @@ class RecordingMaintainer(threading.Thread):
                 self.drop_segment(cache_path)
                 return None
 
-            # this segment has a valid duration and has video data, so publish an update
+            # this segment has a valid duration and has video data, so publish an update.
+            # unlike the other topics the third field carries the segment's end
+            # rather than its path: a stream copy can only cut on a keyframe, so
+            # segments routinely outrun the configured length and the watchdog
+            # cannot tell a real hole from that overshoot without the true end
             self.recordings_publisher.publish(
-                (camera, start_time.timestamp(), cache_path),
+                (camera, start_time.timestamp(), end_time.timestamp()),
                 RecordingsDataTypeEnum.valid.value,
             )
 

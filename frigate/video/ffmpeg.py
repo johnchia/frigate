@@ -349,6 +349,9 @@ class CameraWatchdog(threading.Thread):
             if not enabled:
                 continue
 
+            # every segment seen this pass, gathered before any is judged
+            seen_segments: list[tuple[float, float | None]] = []
+
             while True:
                 update = self.segment_subscriber.check_for_update(timeout=0)
 
@@ -358,7 +361,7 @@ class CameraWatchdog(threading.Thread):
                 raw_topic, payload = update
                 if raw_topic and payload:
                     topic = str(raw_topic)
-                    camera, segment_time, _ = payload
+                    camera, segment_time, extra = payload
 
                     if camera != self.config.name:
                         continue
@@ -369,19 +372,28 @@ class CameraWatchdog(threading.Thread):
                         )
                         self.latest_invalid_segment_time = segment_time
                         # unusable, but it existed: the maintainer books the
-                        # loss, so it must not also count as nothing arriving
-                        self.absence.note_segment(segment_time)
+                        # loss, so it must not also count as nothing arriving.
+                        # its duration is exactly what could not be trusted,
+                        # so the nominal length has to stand in
+                        seen_segments.append((segment_time, None))
                     elif topic.endswith(RecordingsDataTypeEnum.valid.value):
                         self.logger.debug(
                             f"Latest valid recording segment time on {camera}: {segment_time}"
                         )
                         self.latest_valid_segment_time = segment_time
-                        self.absence.note_segment(segment_time)
+                        # `valid` carries the probed end in place of the path
+                        seen_segments.append((segment_time, extra))
                     elif topic.endswith(RecordingsDataTypeEnum.latest.value):
                         if segment_time is not None:
                             self.latest_cache_segment_time = segment_time
                         else:
                             self.latest_cache_segment_time = 0
+
+            # the maintainer probes a pass of segments concurrently, so they can
+            # publish out of order. feed them in time order or a segment that
+            # merely arrived late reads as a hole where it was about to land
+            for start, end in sorted(seen_segments, key=lambda seen: seen[0]):
+                self.absence.note_segment(start, end)
 
             now = datetime.now().timestamp()
 
