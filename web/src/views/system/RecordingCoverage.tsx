@@ -32,6 +32,17 @@ type CellStatus =
   // no footage kept, on a camera where that is expected rather than a fault
   | "empty";
 
+/** One recorded cause, totalled across the window. */
+type Cause = {
+  reason: string;
+  /** seconds of loss booked against this cause */
+  seconds: number;
+  /** evidence from the most recent incident, such as the ffmpeg error */
+  detail?: string | null;
+  /** end time of the newest incident, used to pick which detail to keep */
+  latest: number;
+};
+
 type Cell = {
   dayKey: string;
   hour: number;
@@ -277,7 +288,7 @@ function CameraCoverageCard({
 
   // what actually caused the loss across the whole window, worst first
   const causeTotals = useMemo(() => {
-    const totals = new Map<string, number>();
+    const totals = new Map<string, Cause>();
 
     for (const gap of gaps ?? []) {
       const start = Math.max(gap.start_time, gapWindow.after);
@@ -285,10 +296,20 @@ function CameraCoverageCard({
 
       if (end <= start) continue;
 
-      totals.set(gap.reason, (totals.get(gap.reason) ?? 0) + (end - start));
+      const existing = totals.get(gap.reason);
+
+      // carry the newest evidence, which is the one still worth chasing
+      const newest = existing === undefined || gap.end_time >= existing.latest;
+
+      totals.set(gap.reason, {
+        reason: gap.reason,
+        seconds: (existing?.seconds ?? 0) + (end - start),
+        detail: newest ? (gap.detail ?? existing?.detail) : existing?.detail,
+        latest: Math.max(existing?.latest ?? 0, gap.end_time),
+      });
     }
 
-    return [...totals.entries()].sort((a, b) => b[1] - a[1]);
+    return [...totals.values()].sort((a, b) => b.seconds - a.seconds);
   }, [gaps, gapWindow]);
 
   const model = useMemo(() => {
@@ -509,7 +530,10 @@ function CameraCoverageCard({
                 missingSeconds={model.missingSeconds}
                 affectedHours={model.affectedHours}
               />
-              <CauseBreakdown causes={causeTotals} />
+              <CauseBreakdown
+                causes={causeTotals}
+                missingSeconds={model.missingSeconds}
+              />
             </>
           ) : (
             <div className="mt-2 rounded-md bg-background p-2 text-xs text-muted-foreground">
@@ -572,23 +596,43 @@ function CoverageHeadline({
 }
 
 type CauseBreakdownProps = {
-  causes: [string, number][];
+  causes: Cause[];
+  missingSeconds: number;
 };
 
-function CauseBreakdown({ causes }: CauseBreakdownProps) {
+function CauseBreakdown({ causes, missingSeconds }: CauseBreakdownProps) {
   const { t } = useTranslation(["views/system"]);
 
-  if (causes.length === 0) return null;
+  // an empty table and a healthy camera look identical without this, and the
+  // difference matters: causes are only known from the moment they happened
+  if (causes.length === 0) {
+    if (missingSeconds <= 0) return null;
+
+    return (
+      <div className="mt-1 text-xs text-muted-foreground">
+        {t("coverage.reason.none")}
+      </div>
+    );
+  }
+
+  const worst = causes[0];
 
   return (
-    <div className="mt-1 flex flex-row flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-      <span className="font-medium">{t("coverage.reason.label")}</span>
-      {causes.map(([reason, seconds]) => (
-        <span key={reason}>
-          {t(`coverage.reason.${reason}`)}{" "}
-          <span className="tabular-nums">{formatMissing(seconds)}</span>
-        </span>
-      ))}
+    <div className="mt-1 text-xs text-muted-foreground">
+      <div className="flex flex-row flex-wrap items-center gap-x-3 gap-y-0.5">
+        <span className="font-medium">{t("coverage.reason.label")}</span>
+        {causes.map((cause) => (
+          <span key={cause.reason} title={cause.detail ?? undefined}>
+            {t(`coverage.reason.${cause.reason}`)}{" "}
+            <span className="tabular-nums">{formatMissing(cause.seconds)}</span>
+          </span>
+        ))}
+      </div>
+      {worst.detail && (
+        <div className="mt-0.5 truncate font-mono text-[11px] opacity-80">
+          {worst.detail}
+        </div>
+      )}
     </div>
   );
 }

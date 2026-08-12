@@ -238,6 +238,10 @@ class StorageMaintainer(threading.Thread):
                 RecordingGapReasonEnum.storage_pressure,
                 recording.start_time,
                 recording.end_time,
+                detail=(
+                    f"deleted early to reclaim {deleted_segments_size:.0f} MB, "
+                    "so the disk is too small for the configured retention"
+                ),
             )
         gap_recorder.flush()
 

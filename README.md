@@ -17,6 +17,16 @@ A fork of [blakeblackshear/frigate](https://github.com/blakeblackshear/frigate).
   consecutive losses coalesced into one range so an outage is a single row
   rather than one per segment. The coverage grid reads them back, so a gap says
   why it happened instead of only that it did.
+- **Diagnosable stream dropouts.** Absence is counted from the segment sequence
+  rather than from a two minute staleness timer, so the common case of a camera
+  dropping its connection for under a minute is recorded instead of vanishing.
+  Each gap is classified by evidence gathered as it happened: whether the
+  recording process exited (`stream_disconnected`, carrying ffmpeg's own exit
+  code and error, so `401 Unauthorized` and `Connection timed out` are told
+  apart), stayed up producing nothing (`stream_stalled`), or whether Frigate
+  itself was down (`frigate_restart`, so a host reboot is not blamed on every
+  camera at once). Every cause now carries a `detail` string, which is what
+  makes a row worth reading.
 - **Motion tuner threshold preview.** Draws a patch over the camera image while
   a motion slider is held, sized by `contour_area` and strobing by `threshold`,
   so both can be judged against the scene instead of computed by hand. Neither

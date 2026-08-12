@@ -26,5 +26,9 @@ class RecordingGapReasonEnum(str, Enum):
     move_failed = "move_failed"
     # storage ran short and footage was deleted before its retention expired
     storage_pressure = "storage_pressure"
-    # no segment was produced at all, so the stream itself was down
-    stream_absent = "stream_absent"
+    # the recording ffmpeg process exited, so the source stopped being readable
+    stream_disconnected = "stream_disconnected"
+    # no segment was produced and the recording process was never seen to exit
+    stream_stalled = "stream_stalled"
+    # Frigate itself was not running, so nothing was capturing
+    frigate_restart = "frigate_restart"

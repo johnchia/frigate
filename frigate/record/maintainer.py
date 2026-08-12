@@ -38,10 +38,18 @@ from frigate.const import (
     UPSERT_RECORDING_GAP,
 )
 from frigate.models import Recordings, ReviewSegment
-from frigate.record.gaps import MIN_COALESCE_TOLERANCE, RecordingGapRecorder
+from frigate.record.gaps import (
+    MIN_COALESCE_TOLERANCE,
+    RecordingGapRecorder,
+    format_ffmpeg_failure,
+)
 from frigate.record.types import RecordingGapReasonEnum
 from frigate.review.types import SeverityEnum
-from frigate.util.builtin import DEFAULT_RECORD_SEGMENT_TIME, get_record_segment_time
+from frigate.util.builtin import (
+    DEFAULT_RECORD_SEGMENT_TIME,
+    clean_camera_user_pass,
+    get_record_segment_time,
+)
 from frigate.util.services import get_video_properties
 
 logger = logging.getLogger(__name__)
@@ -124,6 +132,7 @@ class RecordingMaintainer(threading.Thread):
         reason: RecordingGapReasonEnum,
         start_time: float,
         end_time: float | None = None,
+        detail: str | None = None,
     ) -> None:
         """Note that recording was lost for a stretch of time.
 
@@ -138,6 +147,7 @@ class RecordingMaintainer(threading.Thread):
             start_time,
             end_time if end_time is not None else start_time + segment_seconds,
             tolerance=max(MIN_COALESCE_TOLERANCE, 2 * segment_seconds),
+            detail=detail,
         )
 
     async def move_files(self) -> None:
@@ -272,6 +282,10 @@ class RecordingMaintainer(threading.Thread):
                         camera,
                         RecordingGapReasonEnum.cache_overflow,
                         rec["start_time"].timestamp(),
+                        detail=(
+                            f"the mover fell behind with {processed_segment_count} "
+                            f"segments waiting, keeping the newest {keep_count}"
+                        ),
                     )
                 grouped_recordings[camera] = grouped_recordings[camera][-keep_count:]
 
@@ -292,6 +306,10 @@ class RecordingMaintainer(threading.Thread):
                         camera,
                         RecordingGapReasonEnum.detect_stalled,
                         rec["start_time"].timestamp(),
+                        detail=(
+                            f"{unprocessed_segment_count} segments were never "
+                            "processed, which points at the detect stream"
+                        ),
                     )
                 grouped_recordings[camera] = grouped_recordings[camera][-keep_count:]
 
@@ -415,6 +433,7 @@ class RecordingMaintainer(threading.Thread):
                     camera,
                     RecordingGapReasonEnum.invalid_video,
                     start_time.timestamp(),
+                    detail="the segment held no readable video stream",
                 )
                 self.drop_segment(cache_path)
                 return None
@@ -438,6 +457,11 @@ class RecordingMaintainer(threading.Thread):
                     camera,
                     RecordingGapReasonEnum.corrupt_segment,
                     start_time.timestamp(),
+                    detail=(
+                        "the segment could not be probed"
+                        if duration == -1
+                        else f"the segment probed to an impossible {duration:.1f}s"
+                    ),
                 )
                 self.drop_segment(cache_path)
                 return None
@@ -718,13 +742,24 @@ class RecordingMaintainer(threading.Thread):
 
                 if p.returncode != 0:
                     logger.error(f"Unable to convert {cache_path} to {file_path}")
+                    stderr_output = ""
+
                     if p.stderr:
-                        logger.error((await p.stderr.read()).decode("ascii"))
+                        stderr_output = (await p.stderr.read()).decode("ascii")
+                        logger.error(stderr_output)
+
                     self.record_gap(
                         camera,
                         RecordingGapReasonEnum.remux_failed,
                         start_time.timestamp(),
                         end_time.timestamp(),
+                        detail=format_ffmpeg_failure(
+                            p.returncode,
+                            [
+                                clean_camera_user_pass(line)
+                                for line in stderr_output.splitlines()
+                            ],
+                        ),
                     )
                     return None
                 else:
@@ -771,6 +806,7 @@ class RecordingMaintainer(threading.Thread):
                 RecordingGapReasonEnum.move_failed,
                 start_time.timestamp(),
                 end_time.timestamp(),
+                detail=f"{type(e).__name__} while storing the segment: {e}",
             )
 
         # clear end_time cache

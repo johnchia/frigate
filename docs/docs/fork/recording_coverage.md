@@ -183,26 +183,75 @@ configuration rather than by fixing a fault:
 Review the estimates on the System page's Storage tab, then either lower
 retention, lower the record stream bitrate, or add capacity.
 
-### Camera produced nothing (`stream_absent`)
+### Camera stream disconnected (`stream_disconnected`)
 
-No segment reached the cache at all. This is the only cause that covers time
-where nothing arrived to be discarded, and without it that time would leave no
-trace anywhere. It is recorded by the record watchdog, which restarts the
-ffmpeg record process once nothing new has appeared for roughly two segment
-lengths plus a margin.
+No segment reached the cache, and the ffmpeg process writing recordings exited
+during that stretch. The `detail` on the row carries its exit code and last
+error output, which is usually the whole diagnosis:
+
+| ffmpeg said                                   | It means                                                       |
+| --------------------------------------------- | -------------------------------------------------------------- |
+| `Connection timed out`, `Network unreachable` | The camera or the network path went away                       |
+| `401 Unauthorized`, `403 Forbidden`           | Credentials rejected, often after a password rotation          |
+| `Invalid data found when processing input`    | The camera sent something ffmpeg could not parse               |
+| `Connection refused`                          | Nothing is listening, so the camera rebooted or go2rtc is down |
+| `Immediate exit requested`                    | Frigate asked it to stop, so look for a restart instead        |
+
+Root causes behind those:
 
 - Camera offline, rebooting, or applying a firmware update.
 - Network path down: a PoE switch port, a Wi-Fi dropout, a DHCP lease change
   giving the camera a new address, or a VLAN change.
-- Credentials rejected after a password rotation on the camera.
 - The camera refusing a new RTSP session because it hit its client limit, which
   often shows up after adding a second consumer such as a recorder or an app.
-- Camera CPU overloaded by too many simultaneous streams, so it stops serving
-  the substream reliably.
 - go2rtc restream not running, when the record stream is sourced through it.
 
+### Camera stopped sending video (`stream_stalled`)
+
+No segment reached the cache, but the recording process stayed up the whole
+time. The connection was still open and the camera simply stopped delivering
+usable frames, so nothing was there to write.
+
+- Camera CPU overloaded by too many simultaneous streams, so it stops serving
+  the substream reliably while keeping the socket open.
+- A camera that silently pauses its stream during its own night mode switch,
+  IR cut filter change, or motion driven exposure change.
+- An upstream device holding the TCP connection open after the camera behind
+  it has gone, common with some PoE switches and Wi-Fi extenders.
+- Severe host contention, where ffmpeg is running but starved of CPU.
+
+### Frigate was not running (`frigate_restart`)
+
+Booked once at startup, covering the stretch between the newest kept segment
+and the moment Frigate came back. Nothing inside a single run can observe this,
+which is why an update, a container restart, a crash, or a host reboot would
+otherwise look like every camera failing at once.
+
+- Ordinary restarts after a config change or a version upgrade.
+- The container being OOM killed, which shows as a gap with no clean shutdown
+  in the log before it.
+- Host reboots, including unattended upgrades and power loss.
+
+If these appear far more often than you restart deliberately, check the
+container's restart count and the host's memory pressure.
+
+### How absence is distinguished from bad segments
+
 Segments that did arrive but were unusable are recorded as `invalid_video` or
-`corrupt_segment` instead, so those never double count as `stream_absent`.
+`corrupt_segment` instead, so they never double count as absence.
+
+Absence is measured by counting segments rather than by watching for a quiet
+cache. A recording maintainer that is running late still moves every segment it
+was given, so lateness must not be mistaken for a camera that stopped
+producing: only a segment that was never written leaves a hole in the sequence.
+That is what makes short dropouts visible. An earlier version of this feature
+only noticed absence after roughly two minutes of silence, which meant the
+common case, a camera that drops its connection for thirty to ninety seconds
+and reconnects, was never recorded at all.
+
+An outage that is still running is booked before it ends, so a camera that
+never comes back is still reported. Each booking starts where the last one
+ended, so the same stretch is not counted twice when footage resumes.
 
 ## Matching a cause to a resource
 
@@ -217,6 +266,10 @@ camera degrades alone, it is usually that camera or its network path.
 | One camera only, long solid blocks                      | Camera offline, or its detect pipeline stalled           |
 | Losses begin after adding a camera or raising a bitrate | Aggregate throughput or retention headroom               |
 | Oldest days shrink faster than retention says           | Storage capacity, reported as `storage_pressure`         |
+| Every camera loses the same stretch, once               | Frigate restarted, reported as `frigate_restart`         |
+
+When the cause is `stream_disconnected`, read the row's detail before reaching
+for any of this: ffmpeg usually names the problem itself.
 
 For diagnosing the underlying resource, see
 [Troubleshooting CPU usage](/troubleshooting/cpu) and
@@ -236,10 +289,20 @@ For diagnosing the underlying resource, see
 - **Gaps expire with the footage they describe.** Each row is deleted once it
   falls outside the longest retention configured for its camera, since a gap
   outlives nothing.
+- **Each row carries its evidence.** The `detail` column holds what was
+  observed at the time, such as the ffmpeg error before a disconnect or the
+  size of the backlog when the mover fell behind. A cause names the suspect;
+  the detail is what you act on. It is trimmed to fit, keeping the end, because
+  the last thing said before a failure is the useful part. Camera credentials
+  are stripped before anything is stored.
 - **An unattributed hole is possible.** Footage can be missing without a gap
   row, for example if it was lost before this feature existed or removed
   outside Frigate. Those hours show as missing with the cause given as not
-  recorded, which is deliberate: the grid never guesses a cause.
+  recorded, which is deliberate: the grid never guesses a cause. A camera whose
+  causes are all unrecorded is the expected state right after installing this,
+  since a cause is only known from the moment it happens and nothing is
+  backfilled.
 
 Gaps are available over the API at `GET /api/recordings/gaps`, accepting
-`cameras`, `after`, and `before`.
+`cameras`, `after`, and `before`. Each row carries `camera`, `start_time`,
+`end_time`, `reason`, `segments`, and `detail`.

@@ -24,8 +24,7 @@ from frigate.config.camera.updater import (
 )
 from frigate.const import PROCESS_PRIORITY_HIGH, UPSERT_RECORDING_GAP
 from frigate.log import LogPipe
-from frigate.record.gaps import MIN_COALESCE_TOLERANCE, RecordingGapRecorder
-from frigate.record.types import RecordingGapReasonEnum
+from frigate.record.gaps import RecordingGapRecorder, StreamAbsenceTracker
 from frigate.util.builtin import EventsPerSecond, get_record_segment_time
 from frigate.util.ffmpeg import start_or_restart_ffmpeg, stop_ffmpeg
 from frigate.util.image import (
@@ -177,6 +176,16 @@ class CameraWatchdog(threading.Thread):
             lambda gap: self.requestor.send_data(UPSERT_RECORDING_GAP, gap)
         )
 
+        # The watchdog is the only place that sees both the segment timeline
+        # and why the recording process died, so it owns the classification
+        # rather than leaving the absence to be explained after the fact.
+        self.absence = StreamAbsenceTracker(
+            self.config.name,
+            segment_time,
+            self.sleeptime,
+            self.gap_recorder,
+        )
+
         # Stall tracking (based on last processed frame)
         self._stall_timestamps: deque[float] = deque()
         self._stall_active: bool = False
@@ -205,6 +214,11 @@ class CameraWatchdog(threading.Thread):
             self.requestor.send_data(f"{self.config.name}/status/record", status)
             self._last_record_status = status
             self._last_status_update_time = now
+
+    def _note_record_exit(self, returncode: int | None, logpipe: LogPipe) -> None:
+        """Keep what ffmpeg said on its way out, so a gap can cite it."""
+        detail = self.absence.note_process_exit(returncode, logpipe.tail())
+        self.logger.error(f"Recording process for {self.config.name} exited: {detail}")
 
     def _check_config_updates(self) -> dict[str, list[str]]:
         """Check for config updates and return the update dict."""
@@ -286,6 +300,7 @@ class CameraWatchdog(threading.Thread):
                 self.latest_valid_segment_time = 0
                 self.latest_invalid_segment_time = 0
                 self.latest_cache_segment_time = 0
+                self.absence.reset()
                 self.record_enable_time = datetime.now().astimezone(UTC)
                 last_restart_time = datetime.now().timestamp()
                 continue
@@ -300,6 +315,7 @@ class CameraWatchdog(threading.Thread):
                     self.latest_valid_segment_time = 0
                     self.latest_invalid_segment_time = 0
                     self.latest_cache_segment_time = 0
+                    self.absence.reset()
                     self.record_enable_time = datetime.now().astimezone(UTC)
                 else:
                     self.logger.debug(f"Disabling camera {self.config.name}")
@@ -324,6 +340,7 @@ class CameraWatchdog(threading.Thread):
                     self.latest_valid_segment_time = 0
                     self.latest_invalid_segment_time = 0
                     self.latest_cache_segment_time = 0
+                    self.absence.reset()
                     self.record_enable_time = datetime.now().astimezone(UTC)
                     last_restart_time = datetime.now().timestamp()
                 self.was_record_enabled_in_config = record_enabled_in_config
@@ -351,11 +368,15 @@ class CameraWatchdog(threading.Thread):
                             f"Invalid recording segment detected for {camera} at {segment_time}"
                         )
                         self.latest_invalid_segment_time = segment_time
+                        # unusable, but it existed: the maintainer books the
+                        # loss, so it must not also count as nothing arriving
+                        self.absence.note_segment(segment_time)
                     elif topic.endswith(RecordingsDataTypeEnum.valid.value):
                         self.logger.debug(
                             f"Latest valid recording segment time on {camera}: {segment_time}"
                         )
                         self.latest_valid_segment_time = segment_time
+                        self.absence.note_segment(segment_time)
                     elif topic.endswith(RecordingsDataTypeEnum.latest.value):
                         if segment_time is not None:
                             self.latest_cache_segment_time = segment_time
@@ -455,22 +476,14 @@ class CameraWatchdog(threading.Thread):
                     if cache_stale or valid_stale or invalid_stale:
                         if cache_stale:
                             reason = "No new recording segments were created"
-                            # nothing reached the cache at all, so no other
-                            # drop path saw this time pass. the segments that
-                            # did arrive but were unusable are already
-                            # recorded by the maintainer, so only the absent
-                            # case is booked here and it is not double counted
-                            self.gap_recorder.record(
-                                self.config.name,
-                                RecordingGapReasonEnum.stream_absent,
-                                latest_cache_dt.timestamp(),
-                                now_utc.timestamp(),
-                                tolerance=max(
-                                    MIN_COALESCE_TOLERANCE,
-                                    2 * self.record_segment_time,
-                                ),
+                            # book the outage while it is still running rather
+                            # than waiting for footage to resume, which for a
+                            # camera that never comes back is never. segments
+                            # that did arrive but were unusable are recorded by
+                            # the maintainer, so this only covers absence
+                            self.absence.book(
+                                latest_cache_dt.timestamp(), now_utc.timestamp()
                             )
-                            self.gap_recorder.flush()
                         elif valid_stale:
                             reason = "No new valid recording segments were created"
                         else:  # invalid_stale
@@ -500,6 +513,11 @@ class CameraWatchdog(threading.Thread):
 
                 if poll is None:
                     continue
+
+                # capture why it died before dump() drains the buffer, so the
+                # gap this is about to cause can name the cause
+                if "record" in p["roles"]:
+                    self._note_record_exit(poll, p["logpipe"])
 
                 for role in p["roles"]:
                     self.requestor.send_data(

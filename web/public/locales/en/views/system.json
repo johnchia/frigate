@@ -202,8 +202,11 @@
       "remux_failed": "Could not be written to disk",
       "move_failed": "Could not be stored",
       "storage_pressure": "Deleted early for storage space",
-      "stream_absent": "Camera produced nothing",
-      "unknown": "Not recorded"
+      "unknown": "Not recorded",
+      "stream_disconnected": "Camera stream disconnected",
+      "stream_stalled": "Camera stopped sending video",
+      "frigate_restart": "Frigate was not running",
+      "none": "No causes recorded yet. Causes are only known from when they happen, so footage missing from before this version was installed has none."
     },
     "unexplained": "cause not recorded"
   },
