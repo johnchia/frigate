@@ -35,9 +35,13 @@ from frigate.const import (
     MAX_SEGMENT_DURATION,
     MAX_SEGMENTS_IN_CACHE,
     RECORD_DIR,
+    UPSERT_RECORDING_GAP,
 )
 from frigate.models import Recordings, ReviewSegment
+from frigate.record.gaps import MIN_COALESCE_TOLERANCE, RecordingGapRecorder
+from frigate.record.types import RecordingGapReasonEnum
 from frigate.review.types import SeverityEnum
+from frigate.util.builtin import DEFAULT_RECORD_SEGMENT_TIME, get_record_segment_time
 from frigate.util.services import get_video_properties
 
 logger = logging.getLogger(__name__)
@@ -102,6 +106,39 @@ class RecordingMaintainer(threading.Thread):
         self.audio_recordings_info: dict[str, list] = defaultdict(list)
         self.end_time_cache: dict[str, tuple[datetime.datetime, float]] = {}
         self.unexpected_cache_files_logged: bool = False
+        self.gap_recorder = RecordingGapRecorder(
+            lambda gap: self.requestor.send_data(UPSERT_RECORDING_GAP, gap)
+        )
+
+    def _segment_seconds(self, camera: str) -> int:
+        camera_config = self.config.cameras.get(camera)
+        return (
+            get_record_segment_time(camera_config)
+            if camera_config
+            else DEFAULT_RECORD_SEGMENT_TIME
+        )
+
+    def record_gap(
+        self,
+        camera: str,
+        reason: RecordingGapReasonEnum,
+        start_time: float,
+        end_time: float | None = None,
+    ) -> None:
+        """Note that recording was lost for a stretch of time.
+
+        Segments dropped before they could be probed have no known duration, so
+        the nominal segment length stands in. That is the span the segment was
+        meant to cover, which is exactly what is missing.
+        """
+        segment_seconds = self._segment_seconds(camera)
+        self.gap_recorder.record(
+            camera,
+            reason,
+            start_time,
+            end_time if end_time is not None else start_time + segment_seconds,
+            tolerance=max(MIN_COALESCE_TOLERANCE, 2 * segment_seconds),
+        )
 
     async def move_files(self) -> None:
         cache_files = [
@@ -231,6 +268,11 @@ class RecordingMaintainer(threading.Thread):
                     cache_path = rec["cache_path"]
                     Path(cache_path).unlink(missing_ok=True)
                     self.end_time_cache.pop(cache_path, None)
+                    self.record_gap(
+                        camera,
+                        RecordingGapReasonEnum.cache_overflow,
+                        rec["start_time"].timestamp(),
+                    )
                 grouped_recordings[camera] = grouped_recordings[camera][-keep_count:]
 
             # see if detection has failed and unprocessed segments need to be deleted
@@ -246,6 +288,11 @@ class RecordingMaintainer(threading.Thread):
                     cache_path = rec["cache_path"]
                     Path(cache_path).unlink(missing_ok=True)
                     self.end_time_cache.pop(cache_path, None)
+                    self.record_gap(
+                        camera,
+                        RecordingGapReasonEnum.detect_stalled,
+                        rec["start_time"].timestamp(),
+                    )
                 grouped_recordings[camera] = grouped_recordings[camera][-keep_count:]
 
         tasks = []
@@ -313,6 +360,9 @@ class RecordingMaintainer(threading.Thread):
             [r for r in recordings_to_insert if r is not None],
         )
 
+        # one write per incident rather than one per lost segment
+        self.gap_recorder.flush()
+
     def _expire_stale_recordings_info(
         self, grouped_recordings: defaultdict[str, list[dict[str, Any]]]
     ) -> None:
@@ -361,6 +411,11 @@ class RecordingMaintainer(threading.Thread):
                     (camera, start_time.timestamp(), cache_path),
                     RecordingsDataTypeEnum.invalid.value,
                 )
+                self.record_gap(
+                    camera,
+                    RecordingGapReasonEnum.invalid_video,
+                    start_time.timestamp(),
+                )
                 self.drop_segment(cache_path)
                 return None
 
@@ -378,6 +433,11 @@ class RecordingMaintainer(threading.Thread):
                 self.recordings_publisher.publish(
                     (camera, start_time.timestamp(), cache_path),
                     RecordingsDataTypeEnum.invalid.value,
+                )
+                self.record_gap(
+                    camera,
+                    RecordingGapReasonEnum.corrupt_segment,
+                    start_time.timestamp(),
                 )
                 self.drop_segment(cache_path)
                 return None
@@ -660,6 +720,12 @@ class RecordingMaintainer(threading.Thread):
                     logger.error(f"Unable to convert {cache_path} to {file_path}")
                     if p.stderr:
                         logger.error((await p.stderr.read()).decode("ascii"))
+                    self.record_gap(
+                        camera,
+                        RecordingGapReasonEnum.remux_failed,
+                        start_time.timestamp(),
+                        end_time.timestamp(),
+                    )
                     return None
                 else:
                     logger.debug(
@@ -700,6 +766,12 @@ class RecordingMaintainer(threading.Thread):
             logger.error(f"Unable to store recording segment {cache_path}")
             Path(cache_path).unlink(missing_ok=True)
             logger.error(e)
+            self.record_gap(
+                camera,
+                RecordingGapReasonEnum.move_failed,
+                start_time.timestamp(),
+                end_time.timestamp(),
+            )
 
         # clear end_time cache
         self.end_time_cache.pop(cache_path, None)

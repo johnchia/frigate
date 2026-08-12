@@ -14,6 +14,12 @@ class MediaRecordingsAvailabilityQueryParams(BaseModel):
     scale: int = 30
 
 
+class MediaRecordingGapsQueryParams(BaseModel):
+    cameras: str = "all"
+    before: float | SkipJsonSchema[None] = None
+    after: float | SkipJsonSchema[None] = None
+
+
 class RecordingsDeleteQueryParams(BaseModel):
     keep: str | None = None
     cameras: str | None = "all"

@@ -19,6 +19,7 @@ from frigate.api.auth import (
     require_role,
 )
 from frigate.api.defs.query.recordings_query_parameters import (
+    MediaRecordingGapsQueryParams,
     MediaRecordingsAvailabilityQueryParams,
     MediaRecordingsSummaryQueryParams,
     RecordingsDeleteQueryParams,
@@ -26,7 +27,7 @@ from frigate.api.defs.query.recordings_query_parameters import (
 from frigate.api.defs.response.generic_response import GenericResponse
 from frigate.api.defs.tags import Tags
 from frigate.const import RECORD_DIR
-from frigate.models import Event, Recordings
+from frigate.models import Event, RecordingGaps, Recordings
 from frigate.util.time import get_dst_transitions
 
 logger = logging.getLogger(__name__)
@@ -349,6 +350,57 @@ async def no_recordings(
         )
 
     return JSONResponse(content=no_recording_segments)
+
+
+@router.get(
+    "/recordings/gaps",
+    response_model=list[dict],
+    dependencies=[Depends(allow_any_authenticated())],
+)
+async def recording_gaps(
+    request: Request,
+    params: MediaRecordingGapsQueryParams = Depends(),
+    allowed_cameras: list[str] = Depends(get_allowed_cameras_for_filter),
+):
+    """Get recorded reasons for missing recordings in a time range.
+
+    Unlike /recordings/unavailable, which infers gaps from the absence of rows,
+    these are losses Frigate observed and wrote down at the moment they
+    happened, so each one carries a cause.
+    """
+    cameras = params.cameras
+    if cameras != "all":
+        requested = set(unquote(cameras).split(","))
+        camera_list = list(requested.intersection(allowed_cameras))
+    else:
+        camera_list = list(allowed_cameras)
+
+    if not camera_list:
+        return JSONResponse(content=[])
+
+    before = params.before or datetime.now().timestamp()
+    after = params.after or (datetime.now() - timedelta(hours=1)).timestamp()
+
+    gaps = (
+        RecordingGaps.select(
+            RecordingGaps.id,
+            RecordingGaps.camera,
+            RecordingGaps.start_time,
+            RecordingGaps.end_time,
+            RecordingGaps.reason,
+            RecordingGaps.segments,
+        )
+        .where(
+            RecordingGaps.camera << camera_list,
+            RecordingGaps.end_time >= after,
+            RecordingGaps.start_time <= before,
+        )
+        .order_by(RecordingGaps.start_time.asc())
+        .dicts()
+        .iterator()
+    )
+
+    return JSONResponse(content=list(gaps))
 
 
 @router.delete(

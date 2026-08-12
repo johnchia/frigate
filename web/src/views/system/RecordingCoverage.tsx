@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import useSWR from "swr";
 import { useTranslation } from "react-i18next";
 import { TZDate } from "react-day-picker";
@@ -11,7 +11,7 @@ import {
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import ActivityIndicator from "@/components/indicators/activity-indicator";
 import { CameraConfig, FrigateConfig } from "@/types/frigateConfig";
-import { RecordingsSummaryDay } from "@/types/review";
+import { RecordingGap, RecordingsSummaryDay } from "@/types/review";
 import { useTimezone } from "@/hooks/use-date-utils";
 import { cn } from "@/lib/utils";
 
@@ -20,7 +20,7 @@ const HOURS = Array.from({ length: 24 }, (_, i) => i);
 const SECONDS_PER_HOUR = 3600;
 // fixed cell columns: stretched to the full width of a desktop card the row
 // stops reading as a heatmap and starts reading as a bar chart
-const GRID_COLUMNS = "repeat(24, 18px)";
+const GRID_COLUMNS = "repeat(24, minmax(0, 1fr))";
 
 // a cell is either fully covered, missing some fraction of its hour, or not
 // part of the window we can judge at all
@@ -40,6 +40,8 @@ type Cell = {
   missing: number;
   /** ramp step 1-4, or 0 when nothing is missing */
   bin: number;
+  /** causes Frigate recorded for this hour, worst first */
+  reasons: string[];
 };
 
 /**
@@ -78,6 +80,19 @@ function formatMissing(seconds: number): string {
   return remainder === 0 ? `${hours}h` : `${hours}h ${remainder}m`;
 }
 
+/** Name the recorded causes for an hour, or say plainly that none were. */
+function useReasonText() {
+  const { t } = useTranslation(["views/system"]);
+
+  return useCallback(
+    (reasons: string[]) =>
+      reasons.length === 0
+        ? t("coverage.unexplained")
+        : reasons.map((reason) => t(`coverage.reason.${reason}`)).join(", "),
+    [t],
+  );
+}
+
 type RecordingCoverageProps = {
   cameras: CameraConfig[];
 };
@@ -100,23 +115,21 @@ export default function RecordingCoverage({ cameras }: RecordingCoverageProps) {
   );
 
   return (
-    <div className="mt-4">
+    <div className="scrollbar-container mt-4 flex size-full flex-col overflow-y-auto">
       <div className="flex flex-row items-center justify-between">
         <div className="flex flex-row items-center gap-2 text-sm font-medium text-muted-foreground">
-          {t("storage.coverage.title")}
+          {t("coverage.heading")}
           <Popover>
             <PopoverTrigger asChild>
               <button
                 className="focus:outline-none"
-                aria-label={t("storage.coverage.title")}
+                aria-label={t("coverage.heading")}
               >
                 <CiCircleAlert className="size-5" />
               </button>
             </PopoverTrigger>
             <PopoverContent className="w-80">
-              <div className="space-y-2 text-sm">
-                {t("storage.coverage.tips")}
-              </div>
+              <div className="space-y-2 text-sm">{t("coverage.tips")}</div>
             </PopoverContent>
           </Popover>
         </div>
@@ -127,15 +140,15 @@ export default function RecordingCoverage({ cameras }: RecordingCoverageProps) {
           onValueChange={(value) => {
             if (value) setRangeDays(parseInt(value));
           }}
-          aria-label={t("storage.coverage.range.label")}
+          aria-label={t("coverage.range.label")}
         >
           {RANGE_OPTIONS.map((option) => (
             <ToggleGroupItem
               key={option}
               value={option.toString()}
-              aria-label={t("storage.coverage.range.option", { days: option })}
+              aria-label={t("coverage.range.option", { days: option })}
             >
-              {t("storage.coverage.range.option", { days: option })}
+              {t("coverage.range.option", { days: option })}
             </ToggleGroupItem>
           ))}
         </ToggleGroup>
@@ -145,10 +158,10 @@ export default function RecordingCoverage({ cameras }: RecordingCoverageProps) {
 
       {recordingCameras.length === 0 ? (
         <div className="mt-4 rounded-lg bg-background_alt p-4 text-sm text-muted-foreground md:rounded-2xl">
-          {t("storage.coverage.noCameras")}
+          {t("coverage.noCameras")}
         </div>
       ) : (
-        <div className="mt-2 flex flex-col gap-2">
+        <div className="mt-2 grid grid-cols-1 gap-2 xl:grid-cols-2 3xl:grid-cols-3">
           {recordingCameras.map((camera) => (
             <CameraCoverageCard
               key={camera.name}
@@ -176,7 +189,7 @@ function CoverageLegend() {
 
   return (
     <div className="mt-2 flex flex-row flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-      <span>{t("storage.coverage.legend.label")}</span>
+      <span>{t("coverage.legend.label")}</span>
       {steps.map((step) => (
         <span key={step.key} className="flex flex-row items-center gap-1.5">
           <span
@@ -186,12 +199,12 @@ function CoverageLegend() {
             )}
             style={step.color ? { backgroundColor: step.color } : undefined}
           />
-          {t(`storage.coverage.legend.${step.key}`)}
+          {t(`coverage.legend.${step.key}`)}
         </span>
       ))}
       <span className="flex flex-row items-center gap-1.5">
         <span className="size-3 rounded-[2px] bg-slashes" />
-        {t("storage.coverage.legend.outside")}
+        {t("coverage.legend.outside")}
       </span>
     </div>
   );
@@ -209,6 +222,7 @@ function CameraCoverageCard({
   timezone,
 }: CameraCoverageCardProps) {
   const { t } = useTranslation(["views/system"]);
+  const reasonText = useReasonText();
   const [hovered, setHovered] = useState<Cell | undefined>();
 
   const { data: summary } = useSWR<RecordingsSummaryDay[]>([
@@ -216,10 +230,66 @@ function CameraCoverageCard({
     { timezone },
   ]);
 
+  // the window the grid can show, used to bound the gap query
+  const gapWindow = useMemo(() => {
+    const before = Date.now() / 1000;
+    return { after: before - rangeDays * 86400, before };
+  }, [rangeDays]);
+
+  const { data: gaps } = useSWR<RecordingGap[]>([
+    "recordings/gaps",
+    {
+      cameras: camera.name,
+      after: Math.floor(gapWindow.after),
+      before: Math.ceil(gapWindow.before),
+    },
+  ]);
+
   // continuous retention is what makes a coverage percentage meaningful: with
   // it off, an empty hour means nothing moved rather than something broke
   const continuousDays = camera.record.continuous?.days ?? 0;
   const isContinuous = continuousDays > 0;
+
+  // a gap spans a range, so book it against every hour it touches
+  const reasonsByHour = useMemo(() => {
+    const byHour = new Map<number, Map<string, number>>();
+
+    for (const gap of gaps ?? []) {
+      const firstHour = Math.floor(gap.start_time / SECONDS_PER_HOUR);
+      const lastHour = Math.floor((gap.end_time - 0.001) / SECONDS_PER_HOUR);
+
+      for (let hour = firstHour; hour <= lastHour; hour++) {
+        const hourStart = hour * SECONDS_PER_HOUR;
+        const overlap =
+          Math.min(gap.end_time, hourStart + SECONDS_PER_HOUR) -
+          Math.max(gap.start_time, hourStart);
+
+        if (overlap <= 0) continue;
+
+        const causes = byHour.get(hour) ?? new Map<string, number>();
+        causes.set(gap.reason, (causes.get(gap.reason) ?? 0) + overlap);
+        byHour.set(hour, causes);
+      }
+    }
+
+    return byHour;
+  }, [gaps]);
+
+  // what actually caused the loss across the whole window, worst first
+  const causeTotals = useMemo(() => {
+    const totals = new Map<string, number>();
+
+    for (const gap of gaps ?? []) {
+      const start = Math.max(gap.start_time, gapWindow.after);
+      const end = Math.min(gap.end_time, gapWindow.before);
+
+      if (end <= start) continue;
+
+      totals.set(gap.reason, (totals.get(gap.reason) ?? 0) + (end - start));
+    }
+
+    return [...totals.entries()].sort((a, b) => b[1] - a[1]);
+  }, [gaps, gapWindow]);
 
   const model = useMemo(() => {
     if (!summary) return undefined;
@@ -290,7 +360,14 @@ function CameraCoverageCard({
         // an hour that has not finished yet is legitimately partial, and one
         // outside the window is not ours to judge
         if (startMs >= nowMs || startMs < windowStartMs) {
-          cells.push({ dayKey, hour, status: "outside", missing: 0, bin: 0 });
+          cells.push({
+            dayKey,
+            hour,
+            status: "outside",
+            missing: 0,
+            bin: 0,
+            reasons: [],
+          });
           continue;
         }
 
@@ -301,6 +378,7 @@ function CameraCoverageCard({
             status: "inProgress",
             missing: 0,
             bin: 0,
+            reasons: [],
           });
           continue;
         }
@@ -317,6 +395,7 @@ function CameraCoverageCard({
             status: covered > 0 ? "complete" : "empty",
             missing: 0,
             bin: 0,
+            reasons: [],
           });
           continue;
         }
@@ -330,9 +409,17 @@ function CameraCoverageCard({
         hourTotals[hour].missing += missing * SECONDS_PER_HOUR;
         if (bin > 0) affectedHours += 1;
 
+        const causes = reasonsByHour.get(Math.floor(startMs / 1000 / 3600));
+        const reasons = causes
+          ? [...causes.entries()]
+              .sort((a, b) => b[1] - a[1])
+              .map(([reason]) => reason)
+          : [];
+
         cells.push({
           dayKey,
           hour,
+          reasons: bin > 0 ? reasons : [],
           status: bin > 0 ? "loss" : "complete",
           missing,
           bin: Math.max(0, bin),
@@ -355,7 +442,14 @@ function CameraCoverageCard({
       affectedHours,
       retainedFromMs: windowStartMs,
     };
-  }, [summary, timezone, rangeDays, isContinuous, continuousDays]);
+  }, [
+    summary,
+    timezone,
+    rangeDays,
+    isContinuous,
+    continuousDays,
+    reasonsByHour,
+  ]);
 
   const readout = useMemo(() => {
     if (!hovered) return undefined;
@@ -368,24 +462,24 @@ function CameraCoverageCard({
     const hour = `${pad2(hovered.hour)}:00`;
 
     if (hovered.status === "outside") {
-      return t("storage.coverage.cell.outside", { date: label, hour });
+      return t("coverage.cell.outside", { date: label, hour });
     }
     if (hovered.status === "inProgress") {
-      return t("storage.coverage.cell.inProgress", { date: label, hour });
+      return t("coverage.cell.inProgress", { date: label, hour });
     }
     if (hovered.status === "complete") {
-      return t("storage.coverage.cell.complete", { date: label, hour });
+      return t("coverage.cell.complete", { date: label, hour });
     }
     if (hovered.status === "empty") {
-      return t("storage.coverage.cell.empty", { date: label, hour });
+      return t("coverage.cell.empty", { date: label, hour });
     }
-    return t("storage.coverage.cell.loss", {
+    return `${t("coverage.cell.loss", {
       date: label,
       hour,
       percent: ((1 - hovered.missing) * 100).toFixed(1),
       missing: formatMissing(hovered.missing * SECONDS_PER_HOUR),
-    });
-  }, [hovered, timezone, t]);
+    })} (${reasonText(hovered.reasons)})`;
+  }, [hovered, timezone, t, reasonText]);
 
   return (
     <div className="flex-col rounded-lg bg-background_alt p-2.5 md:rounded-2xl">
@@ -394,7 +488,7 @@ function CameraCoverageCard({
           {camera.name.replaceAll("_", " ")}
         </div>
         <div className="text-xs text-muted-foreground">
-          {readout ?? (model ? t("storage.coverage.hint") : "")}
+          {readout ?? (model ? t("coverage.hint") : "")}
         </div>
       </div>
 
@@ -404,22 +498,25 @@ function CameraCoverageCard({
         </div>
       ) : !model ? (
         <div className="py-4 text-sm text-muted-foreground">
-          {t("storage.coverage.empty")}
+          {t("coverage.empty")}
         </div>
       ) : (
         <>
           {isContinuous ? (
-            <CoverageHeadline
-              coverage={model.coverage}
-              missingSeconds={model.missingSeconds}
-              affectedHours={model.affectedHours}
-            />
+            <>
+              <CoverageHeadline
+                coverage={model.coverage}
+                missingSeconds={model.missingSeconds}
+                affectedHours={model.affectedHours}
+              />
+              <CauseBreakdown causes={causeTotals} />
+            </>
           ) : (
             <div className="mt-2 rounded-md bg-background p-2 text-xs text-muted-foreground">
               <span className="font-medium text-primary-variant">
-                {t("storage.coverage.eventOnly.title")}
+                {t("coverage.eventOnly.title")}
               </span>{" "}
-              {t("storage.coverage.eventOnly.description")}
+              {t("coverage.eventOnly.description")}
             </div>
           )}
 
@@ -458,18 +555,40 @@ function CoverageHeadline({
           {(coverage * 100).toFixed(coverage > 0.9995 ? 0 : 1)}%
         </span>
         <span className="text-xs text-muted-foreground">
-          {t("storage.coverage.coverage")}
+          {t("coverage.coverage")}
         </span>
       </div>
       <div className="text-xs text-muted-foreground">
         {missingSeconds < 1
-          ? t("storage.coverage.complete")
+          ? t("coverage.complete")
           : `${formatMissing(missingSeconds)} ${t(
-              "storage.coverage.missing",
-            ).toLowerCase()} · ${t("storage.coverage.affectedHours", {
+              "coverage.missing",
+            ).toLowerCase()} · ${t("coverage.affectedHours", {
               count: affectedHours,
             })}`}
       </div>
+    </div>
+  );
+}
+
+type CauseBreakdownProps = {
+  causes: [string, number][];
+};
+
+function CauseBreakdown({ causes }: CauseBreakdownProps) {
+  const { t } = useTranslation(["views/system"]);
+
+  if (causes.length === 0) return null;
+
+  return (
+    <div className="mt-1 flex flex-row flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+      <span className="font-medium">{t("coverage.reason.label")}</span>
+      {causes.map(([reason, seconds]) => (
+        <span key={reason}>
+          {t(`coverage.reason.${reason}`)}{" "}
+          <span className="tabular-nums">{formatMissing(seconds)}</span>
+        </span>
+      ))}
     </div>
   );
 }
@@ -486,11 +605,11 @@ function CoverageGrid({ rows, timezone, onHover }: CoverageGridProps) {
       className="mt-3 overflow-x-auto"
       onMouseLeave={() => onHover(undefined)}
     >
-      <div className="w-fit">
+      <div className="min-w-[470px] max-w-[640px]">
         <div className="flex flex-row items-center gap-1">
           <div className="w-12 shrink-0" />
           <div
-            className="grid shrink-0 gap-[2px] text-[10px] text-muted-foreground"
+            className="grid flex-1 gap-[2px] text-[10px] text-muted-foreground"
             style={{ gridTemplateColumns: GRID_COLUMNS }}
           >
             {HOURS.map((hour) => (
@@ -513,7 +632,7 @@ function CoverageGrid({ rows, timezone, onHover }: CoverageGridProps) {
               })}
             </div>
             <div
-              className="grid shrink-0 gap-[2px] py-[1px]"
+              className="grid flex-1 gap-[2px] py-[1px]"
               style={{ gridTemplateColumns: GRID_COLUMNS }}
             >
               {row.cells.map((cell) => (
@@ -540,6 +659,7 @@ type CoverageCellProps = {
 
 function CoverageCell({ cell, timezone, onHover }: CoverageCellProps) {
   const { t } = useTranslation(["views/system"]);
+  const reasonText = useReasonText();
 
   const label = useMemo(() => {
     const date = new TZDate(
@@ -550,22 +670,22 @@ function CoverageCell({ cell, timezone, onHover }: CoverageCellProps) {
 
     switch (cell.status) {
       case "outside":
-        return t("storage.coverage.cell.outside", { date, hour });
+        return t("coverage.cell.outside", { date, hour });
       case "inProgress":
-        return t("storage.coverage.cell.inProgress", { date, hour });
+        return t("coverage.cell.inProgress", { date, hour });
       case "complete":
-        return t("storage.coverage.cell.complete", { date, hour });
+        return t("coverage.cell.complete", { date, hour });
       case "empty":
-        return t("storage.coverage.cell.empty", { date, hour });
+        return t("coverage.cell.empty", { date, hour });
       default:
-        return t("storage.coverage.cell.loss", {
+        return `${t("coverage.cell.loss", {
           date,
           hour,
           percent: ((1 - cell.missing) * 100).toFixed(1),
           missing: formatMissing(cell.missing * SECONDS_PER_HOUR),
-        });
+        })} (${reasonText(cell.reasons)})`;
     }
-  }, [cell, timezone, t]);
+  }, [cell, timezone, t, reasonText]);
 
   const color = binColor(cell.bin);
 
@@ -604,10 +724,10 @@ function HourProfile({ profile }: HourProfileProps) {
     <div className="mt-3">
       <div className="flex flex-row items-center gap-1">
         <div className="w-12 shrink-0 text-right text-[10px] text-muted-foreground">
-          {t("storage.coverage.profile.title")}
+          {t("coverage.profile.title")}
         </div>
         <div
-          className="grid shrink-0 gap-[2px]"
+          className="grid flex-1 gap-[2px]"
           style={{ gridTemplateColumns: GRID_COLUMNS }}
         >
           {profile.map((missing, hour) => {
@@ -636,7 +756,7 @@ function HourProfile({ profile }: HourProfileProps) {
         </div>
       </div>
       <div className="ml-[52px] mt-1 text-[10px] text-muted-foreground">
-        {t("storage.coverage.profile.description")}
+        {t("coverage.profile.description")}
       </div>
     </div>
   );

@@ -22,8 +22,10 @@ from frigate.config.camera.updater import (
     CameraConfigUpdateEnum,
     CameraConfigUpdateSubscriber,
 )
-from frigate.const import PROCESS_PRIORITY_HIGH
+from frigate.const import PROCESS_PRIORITY_HIGH, UPSERT_RECORDING_GAP
 from frigate.log import LogPipe
+from frigate.record.gaps import MIN_COALESCE_TOLERANCE, RecordingGapRecorder
+from frigate.record.types import RecordingGapReasonEnum
 from frigate.util.builtin import EventsPerSecond, get_record_segment_time
 from frigate.util.ffmpeg import start_or_restart_ffmpeg, stop_ffmpeg
 from frigate.util.image import (
@@ -169,7 +171,11 @@ class CameraWatchdog(threading.Thread):
         # gap between consecutive publishes can reach 2 * segment_time. Pad the
         # staleness threshold so it's never tighter than that worst case.
         segment_time = get_record_segment_time(self.config)
+        self.record_segment_time = segment_time
         self.record_stale_threshold = max(120, 2 * segment_time + 30)
+        self.gap_recorder = RecordingGapRecorder(
+            lambda gap: self.requestor.send_data(UPSERT_RECORDING_GAP, gap)
+        )
 
         # Stall tracking (based on last processed frame)
         self._stall_timestamps: deque[float] = deque()
@@ -449,6 +455,22 @@ class CameraWatchdog(threading.Thread):
                     if cache_stale or valid_stale or invalid_stale:
                         if cache_stale:
                             reason = "No new recording segments were created"
+                            # nothing reached the cache at all, so no other
+                            # drop path saw this time pass. the segments that
+                            # did arrive but were unusable are already
+                            # recorded by the maintainer, so only the absent
+                            # case is booked here and it is not double counted
+                            self.gap_recorder.record(
+                                self.config.name,
+                                RecordingGapReasonEnum.stream_absent,
+                                latest_cache_dt.timestamp(),
+                                now_utc.timestamp(),
+                                tolerance=max(
+                                    MIN_COALESCE_TOLERANCE,
+                                    2 * self.record_segment_time,
+                                ),
+                            )
+                            self.gap_recorder.flush()
                         elif valid_stale:
                             reason = "No new valid recording segments were created"
                         else:  # invalid_stale

@@ -35,10 +35,12 @@ from frigate.const import (
     UPDATE_JOB_STATE,
     UPDATE_MODEL_STATE,
     UPDATE_REVIEW_DESCRIPTION,
+    UPSERT_RECORDING_GAP,
     UPSERT_REVIEW_SEGMENT,
 )
 from frigate.models import Event, Previews, Recordings, ReviewSegment
 from frigate.ptz.onvif import OnvifCommandEnum, OnvifController
+from frigate.record.gaps import upsert_recording_gap
 from frigate.types import ModelStatusTypesEnum, TrackedObjectUpdateTypesEnum
 from frigate.util.object import get_camera_regions_grid
 from frigate.util.services import restart_frigate
@@ -165,6 +167,9 @@ class Dispatcher:
 
         def handle_insert_preview() -> None:
             Previews.insert(payload).execute()
+
+        def handle_upsert_recording_gap() -> None:
+            upsert_recording_gap(payload)
 
         def handle_upsert_review_segment() -> None:
             ReviewSegment.insert(payload).on_conflict(
@@ -329,6 +334,7 @@ class Dispatcher:
         # Dictionary mapping topic to handlers
         topic_handlers = {
             INSERT_MANY_RECORDINGS: handle_insert_many_recordings,
+            UPSERT_RECORDING_GAP: handle_upsert_recording_gap,
             REQUEST_REGION_GRID: handle_request_region_grid,
             INSERT_PREVIEW: handle_insert_preview,
             UPSERT_REVIEW_SEGMENT: handle_upsert_review_segment,

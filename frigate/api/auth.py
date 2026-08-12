@@ -90,6 +90,7 @@ def require_admin_by_default():
         "/recordings/storage",
         "/recordings/summary",
         "/recordings/unavailable",
+        "/recordings/gaps",
         "/go2rtc/streams",
         "/event_ids",
         "/events",

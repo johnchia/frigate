@@ -23,7 +23,6 @@ import { useDocDomain } from "@/hooks/use-doc-domain";
 import { LuExternalLink } from "react-icons/lu";
 import { FaExclamationTriangle } from "react-icons/fa";
 import ActivityIndicator from "@/components/indicators/activity-indicator";
-import RecordingCoverage from "@/views/system/RecordingCoverage";
 
 type CameraStorage = {
   [key: string]: {
@@ -272,7 +271,6 @@ export default function StorageMetrics({
           totalStorage={totalStorage}
         />
       </div>
-      <RecordingCoverage cameras={Object.values(config.cameras)} />
     </div>
   );
 }
