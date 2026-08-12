@@ -140,6 +140,14 @@ class LogPipe(threading.Thread):
 
         self.pipeReader.close()
 
+    def tail(self, lines: int = 3) -> list[str]:
+        """Return the most recent output without consuming it.
+
+        Unlike `dump`, this leaves the buffer intact so the caller can attach
+        the output to a record and still have it reach the log.
+        """
+        return list(self.deque)[-lines:]
+
     def dump(self) -> None:
         while len(self.deque) > 0:
             self.logger.log(self.level, self.deque.popleft())

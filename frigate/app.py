@@ -75,6 +75,7 @@ from frigate.ptz.autotrack import PtzAutoTrackerThread
 from frigate.ptz.onvif import OnvifController
 from frigate.record.cleanup import RecordingCleanup
 from frigate.record.export import migrate_exports
+from frigate.record.gaps import record_restart_gaps
 from frigate.record.record import RecordProcess
 from frigate.review.review import ReviewProcess
 from frigate.stats.emitter import StatsEmitter
@@ -591,6 +592,11 @@ class FrigateApp:
         self.init_embeddings_manager()
         self.bind_database()
         self.check_db_data_migrations()
+
+        # Book the footage lost while Frigate was down. Nothing inside a run
+        # can see across a restart, so this is the only place a restart stops
+        # looking like the camera's fault.
+        record_restart_gaps(self.config)
 
         # Clean up any stale replay camera artifacts (filesystem + DB)
         cleanup_replay_cameras()

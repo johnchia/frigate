@@ -3,7 +3,14 @@
 import unittest
 from typing import Any
 
-from frigate.record.gaps import RecordingGapRecorder
+from frigate.record.gaps import (
+    MAX_DETAIL_LENGTH,
+    RecordingGapRecorder,
+    StreamAbsenceTracker,
+    format_duration,
+    format_ffmpeg_failure,
+    trim_detail,
+)
 from frigate.record.types import RecordingGapReasonEnum
 
 
@@ -52,7 +59,7 @@ class TestRecordingGapRecorder(unittest.TestCase):
         for pass_index in range(20):
             start = 1000.0 + pass_index * 10
             self.recorder.record(
-                "front", RecordingGapReasonEnum.stream_absent, start, start + 10
+                "front", RecordingGapReasonEnum.stream_disconnected, start, start + 10
             )
             self.recorder.flush()
 
@@ -148,6 +155,211 @@ class TestRecordingGapRecorder(unittest.TestCase):
         self.written.clear()
 
         self.recorder.flush()
+
+        self.assertEqual(self.written, [])
+
+    def test_detail_is_persisted(self):
+        self.recorder.record(
+            "front",
+            RecordingGapReasonEnum.stream_disconnected,
+            1000.0,
+            1010.0,
+            detail="ffmpeg exited with code 1: Connection timed out",
+        )
+        self.recorder.flush()
+
+        self.assertEqual(
+            self.written[0]["detail"],
+            "ffmpeg exited with code 1: Connection timed out",
+        )
+
+    def test_first_evidence_survives_coalescing(self):
+        """The error that started an incident explains it, not a later echo."""
+        self.recorder.record(
+            "front",
+            RecordingGapReasonEnum.stream_disconnected,
+            1000.0,
+            1010.0,
+            detail="Connection timed out",
+        )
+        self.recorder.record(
+            "front",
+            RecordingGapReasonEnum.stream_disconnected,
+            1010.0,
+            1020.0,
+            detail="something less useful",
+        )
+        self.recorder.flush()
+
+        self.assertEqual(len(self.written), 1)
+        self.assertEqual(self.written[0]["detail"], "Connection timed out")
+
+    def test_later_evidence_fills_a_blank(self):
+        self.recorder.record(
+            "front", RecordingGapReasonEnum.stream_stalled, 1000.0, 1010.0
+        )
+        self.recorder.record(
+            "front",
+            RecordingGapReasonEnum.stream_stalled,
+            1010.0,
+            1020.0,
+            detail="found out later",
+        )
+        self.recorder.flush()
+
+        self.assertEqual(self.written[0]["detail"], "found out later")
+
+    def test_missing_detail_is_null(self):
+        self.recorder.record(
+            "front", RecordingGapReasonEnum.cache_overflow, 1000.0, 1010.0
+        )
+        self.recorder.flush()
+
+        self.assertIsNone(self.written[0]["detail"])
+
+
+class TestDetailFormatting(unittest.TestCase):
+    def test_trim_detail_collapses_whitespace(self):
+        self.assertEqual(trim_detail("  a\n  b  \n"), "a b")
+
+    def test_trim_detail_keeps_the_tail(self):
+        detail = "x" * 100 + "the actual error"
+        trimmed = trim_detail(detail)
+
+        self.assertIsNotNone(trimmed)
+        assert trimmed is not None
+        self.assertLessEqual(len(trimmed), MAX_DETAIL_LENGTH)
+
+    def test_long_detail_is_cut_from_the_front(self):
+        detail = "noise " * 200 + "THE ERROR"
+        trimmed = trim_detail(detail)
+
+        assert trimmed is not None
+        self.assertLessEqual(len(trimmed), MAX_DETAIL_LENGTH)
+        self.assertTrue(trimmed.endswith("THE ERROR"))
+        self.assertTrue(trimmed.startswith("..."))
+
+    def test_empty_detail_is_none(self):
+        self.assertIsNone(trim_detail(""))
+        self.assertIsNone(trim_detail(None))
+
+    def test_ffmpeg_failure_cites_the_last_lines(self):
+        detail = format_ffmpeg_failure(
+            1, ["opening stream", "", "Connection timed out"]
+        )
+
+        assert detail is not None
+        self.assertIn("exited with code 1", detail)
+        self.assertIn("Connection timed out", detail)
+
+    def test_ffmpeg_failure_without_output(self):
+        self.assertEqual(format_ffmpeg_failure(255, []), "ffmpeg exited with code 255")
+
+    def test_duration_reads_like_speech(self):
+        self.assertEqual(format_duration(45), "45s")
+        self.assertEqual(format_duration(125), "2m 5s")
+        self.assertEqual(format_duration(7325), "2h 2m")
+
+
+class TestStreamAbsenceTracker(unittest.TestCase):
+    SEGMENT = 10.0
+
+    def setUp(self) -> None:
+        self.written: list[dict[str, Any]] = []
+        self.tracker = StreamAbsenceTracker(
+            "front",
+            self.SEGMENT,
+            poll_interval=10.0,
+            recorder=RecordingGapRecorder(self.written.append),
+        )
+
+    def feed(self, *starts: float) -> None:
+        for start in starts:
+            self.tracker.note_segment(start)
+
+    def test_a_healthy_sequence_books_nothing(self):
+        self.feed(1000.0, 1010.0, 1020.0, 1030.0)
+
+        self.assertEqual(self.written, [])
+
+    def test_the_first_segment_alone_books_nothing(self):
+        """There is no timeline to compare against yet."""
+        self.feed(1000.0)
+
+        self.assertEqual(self.written, [])
+
+    def test_boundary_drift_is_not_a_gap(self):
+        # a segment arriving a few seconds late is normal
+        self.feed(1000.0, 1014.0, 1027.0)
+
+        self.assertEqual(self.written, [])
+
+    def test_a_skipped_segment_is_booked_with_exact_bounds(self):
+        self.feed(1000.0, 1060.0)
+
+        self.assertEqual(len(self.written), 1)
+        gap = self.written[0]
+        # the loss runs from the end of the last segment to the start of the next
+        self.assertEqual(gap["start_time"], 1010.0)
+        self.assertEqual(gap["end_time"], 1060.0)
+
+    def test_a_short_dropout_is_booked(self):
+        """The whole point: well under the old 120s staleness threshold."""
+        self.feed(1000.0, 1040.0)
+
+        self.assertEqual(len(self.written), 1)
+        self.assertEqual(
+            self.written[0]["end_time"] - self.written[0]["start_time"], 30
+        )
+
+    def test_a_process_exit_names_the_cause(self):
+        self.tracker.note_process_exit(1, ["Connection timed out"], now=1030.0)
+        self.feed(1000.0, 1060.0)
+
+        gap = self.written[0]
+        self.assertEqual(gap["reason"], "stream_disconnected")
+        self.assertIn("Connection timed out", gap["detail"])
+
+    def test_without_an_exit_the_stream_is_blamed_for_stalling(self):
+        self.feed(1000.0, 1060.0)
+
+        gap = self.written[0]
+        self.assertEqual(gap["reason"], "stream_stalled")
+        self.assertIn("not seen to exit", gap["detail"])
+
+    def test_an_unrelated_old_exit_is_not_blamed(self):
+        self.tracker.note_process_exit(1, ["ancient history"], now=100.0)
+        self.feed(1000.0, 1060.0)
+
+        self.assertEqual(self.written[0]["reason"], "stream_stalled")
+
+    def test_reset_stops_a_disable_looking_like_loss(self):
+        self.feed(1000.0)
+        self.tracker.reset()
+        # the camera comes back an hour later, which is not a gap
+        self.feed(4600.0, 4610.0)
+
+        self.assertEqual(self.written, [])
+
+    def test_an_ongoing_outage_is_not_counted_twice_on_recovery(self):
+        self.feed(1000.0)
+
+        # booked while still running, the way the staleness check does it
+        self.tracker.book(1000.0, 1200.0)
+        # then footage resumes and the same stretch is seen from the timeline
+        self.feed(1250.0)
+
+        # one incident, and the covered span is contiguous rather than doubled
+        self.assertEqual(len({gap["id"] for gap in self.written}), 1)
+        final = self.written[-1]
+        self.assertEqual(final["start_time"], 1000.0)
+        self.assertEqual(final["end_time"], 1250.0)
+
+    def test_booking_backwards_is_ignored(self):
+        self.tracker.book(1000.0, 1200.0)
+        self.written.clear()
+
+        self.tracker.book(1100.0, 1150.0)
 
         self.assertEqual(self.written, [])
 

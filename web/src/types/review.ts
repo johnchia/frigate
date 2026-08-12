@@ -87,6 +87,7 @@ export type RecordingGap = {
   end_time: number;
   reason: string;
   segments: number;
+  detail?: string | null;
 };
 
 export type MotionData = {

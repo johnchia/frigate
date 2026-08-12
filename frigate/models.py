@@ -146,6 +146,8 @@ class RecordingGaps(Model):
     start_time = DateTimeField(index=True)
     end_time = DateTimeField()
     reason = CharField(max_length=30)
+    # evidence for the reason, such as the ffmpeg error that preceded the loss
+    detail = CharField(max_length=255, null=True)
     # how many individual losses were merged into this range
     segments = IntegerField(default=1)
 

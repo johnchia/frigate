@@ -389,6 +389,7 @@ async def recording_gaps(
             RecordingGaps.end_time,
             RecordingGaps.reason,
             RecordingGaps.segments,
+            RecordingGaps.detail,
         )
         .where(
             RecordingGaps.camera << camera_list,
