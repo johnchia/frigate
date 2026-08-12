@@ -191,6 +191,7 @@ const sidebars: SidebarsConfig = {
         items: ["troubleshooting/cpu", "troubleshooting/memory"],
       },
     ],
+    Fork: ["fork/recording_coverage"],
     Development: [
       "development/contributing",
       "development/contributing-boards",
