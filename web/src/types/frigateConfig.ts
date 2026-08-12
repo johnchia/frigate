@@ -224,6 +224,15 @@ export interface CameraConfig {
     preview: {
       quality: string;
     };
+    // days of gap-free recording retained regardless of motion or objects. when
+    // this is 0 only event footage is kept, so empty time is expected rather
+    // than a fault and coverage has no denominator.
+    continuous: {
+      days: number;
+    };
+    motion: {
+      days: number;
+    };
     retain: {
       days: number;
       mode: string;

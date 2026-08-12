@@ -138,6 +138,47 @@
         "description": "Each camera has {{frames}} frame slots in shared memory. At the fastest camera's frame rate, each frame is available for approximately {{lifetime}}s before being overwritten."
       }
     },
+    "coverage": {
+      "title": "Recording Coverage",
+      "tips": "Every cell is one hour, shaded by how much of that hour is missing from the recordings database. Frigate discards recording segments when the recording mover falls behind, when a stream drops, or when storage runs short, and today those losses only appear in the logs. This grid shows where they landed.",
+      "range": {
+        "label": "Range",
+        "option": "{{days}}d"
+      },
+      "retained": "Retained",
+      "coverage": "Coverage",
+      "missing": "Missing",
+      "complete": "Complete",
+      "affectedHours_one": "{{count}} hour affected",
+      "affectedHours_other": "{{count}} hours affected",
+      "eventOnly": {
+        "title": "Event recordings only",
+        "description": "Continuous retention is off for this camera, so empty hours are expected and there is no coverage percentage to report. The grid below shows when footage was kept, not when it was lost."
+      },
+      "legend": {
+        "label": "Missing",
+        "none": "None",
+        "under1": "under 1%",
+        "under10": "1 to 10%",
+        "under50": "10 to 50%",
+        "over50": "over 50%",
+        "outside": "Outside retention"
+      },
+      "cell": {
+        "complete": "{{date}}, {{hour}}: complete",
+        "loss": "{{date}}, {{hour}}: {{percent}}% covered, {{missing}} missing",
+        "outside": "{{date}}, {{hour}}: outside the retention window",
+        "inProgress": "{{date}}, {{hour}}: still in progress",
+        "empty": "{{date}}, {{hour}}: no footage kept"
+      },
+      "profile": {
+        "title": "By hour of day",
+        "description": "Each hour slot averaged across the whole range. A dip in one column means recordings go missing at the same time every day, which usually points at a scheduled job rather than a camera."
+      },
+      "hint": "Hover a cell for detail.",
+      "empty": "No recordings for this camera yet.",
+      "noCameras": "No cameras have recording enabled."
+    },
     "cameraStorage": {
       "title": "Camera Storage",
       "camera": "Camera",
