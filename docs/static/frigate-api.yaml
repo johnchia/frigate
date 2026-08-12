@@ -7023,6 +7023,59 @@ paths:
       security:
         - frigateUserAuth: []
       x-required-role: any
+  /recordings/gaps:
+    get:
+      tags:
+        - Recordings
+      summary: Recording Gaps
+      description: |-
+        **Access:** Any authenticated user.
+
+        Get recorded reasons for missing recordings in a time range.
+
+        Unlike /recordings/unavailable, which infers gaps from the absence of rows,
+        these are losses Frigate observed and wrote down at the moment they
+        happened, so each one carries a cause.
+      operationId: recording_gaps_recordings_gaps_get
+      parameters:
+        - name: cameras
+          in: query
+          required: false
+          schema:
+            type: string
+            default: all
+            title: Cameras
+        - name: before
+          in: query
+          required: false
+          schema:
+            type: number
+            title: Before
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: number
+            title: After
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                title: Response Recording Gaps Recordings Gaps Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+        - frigateUserAuth: []
+      x-required-role: any
   /recordings/start/{start}/end/{end}:
     delete:
       tags:
